@@ -29,6 +29,10 @@ RC HashGroupByPhysicalOperator::open(Trx *trx)
 {
   ASSERT(children_.size() == 1, "group by operator only support one child, but got %d", children_.size());
 
+  groups_.clear();
+  current_group_ = groups_.end();
+  first_emited_  = false;
+
   PhysicalOperator &child = *children_[0];
   RC                rc    = child.open(trx);
   if (OB_FAIL(rc)) {
@@ -37,8 +41,6 @@ RC HashGroupByPhysicalOperator::open(Trx *trx)
   }
 
   ExpressionTuple<Expression *> group_value_expression_tuple(value_expressions_);
-
-  ValueListTuple group_by_evaluated_tuple;
 
   while (OB_SUCC(rc = child.next())) {
     Tuple *child_tuple = child.current_tuple();
@@ -111,9 +113,12 @@ RC HashGroupByPhysicalOperator::next()
 
 RC HashGroupByPhysicalOperator::close()
 {
-  children_[0]->close();
+  RC rc = children_[0]->close();
+  groups_.clear();
+  current_group_ = groups_.end();
+  first_emited_  = false;
   LOG_INFO("close group by operator");
-  return RC::SUCCESS;
+  return rc;
 }
 
 Tuple *HashGroupByPhysicalOperator::current_tuple()

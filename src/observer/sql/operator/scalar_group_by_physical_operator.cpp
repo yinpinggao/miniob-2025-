@@ -28,6 +28,9 @@ RC ScalarGroupByPhysicalOperator::open(Trx *trx)
 {
   ASSERT(children_.size() == 1, "group by operator only support one child, but got %d", children_.size());
 
+  group_value_.reset();
+  emitted_ = false;
+
   PhysicalOperator &child = *children_[0];
   RC                rc    = child.open(trx);
   if (OB_FAIL(rc)) {
@@ -96,36 +99,59 @@ RC ScalarGroupByPhysicalOperator::next()
   if (emitted_) {
     return RC::RECORD_EOF;
   }
-  if (group_value_ == nullptr || emitted_) {
-    auto *aggregate_expr = static_cast<AggregateFunctionExpr *>(aggregate_expressions_[0]);
-    if (aggregate_expr->aggregate_type() == AggregateFunctionType::COUNT) {
-      Value val(0);
-      auto  Vlist = make_unique<ValueListTuple>();
-      Vlist->set_cells(std::vector<Value>{val});
-      TupleCellSpec spec(aggregate_expr->name());
-      Vlist->set_names(std::vector<TupleCellSpec>{spec});
-      CompositeTuple composite_tuple;
-      composite_tuple.add_tuple(std::move(Vlist));
-
-      AggregatorList aggregator_list;
-      group_value_ = make_unique<GroupValueType>(std::move(aggregator_list), std::move(composite_tuple));
-      emitted_     = true;
-
-      return RC::SUCCESS;
+  if (group_value_ == nullptr) {
+    if (aggregate_expressions_.empty()) {
+      emitted_ = true;
+      return RC::RECORD_EOF;
     }
-    return RC::RECORD_EOF;
+
+    auto value_tuple = make_unique<ValueListTuple>();
+    std::vector<Value>         values;
+    std::vector<TupleCellSpec> specs;
+    values.reserve(aggregate_expressions_.size());
+    specs.reserve(aggregate_expressions_.size());
+
+    for (Expression *expr : aggregate_expressions_) {
+      auto *aggregate_expr = static_cast<AggregateFunctionExpr *>(expr);
+      ASSERT(aggregate_expr != nullptr, "aggregate expression should not be null");
+
+      Value value;
+      if (aggregate_expr->aggregate_type() == AggregateFunctionType::COUNT) {
+        value = Value(0);
+      } else {
+        value = Value(NullValue());
+      }
+
+      values.emplace_back(value);
+
+      const char *name = expr->name();
+      if (name == nullptr || name[0] == '\0') {
+        name = expr->alias();
+      }
+      specs.emplace_back(name == nullptr ? "" : name);
+    }
+
+    value_tuple->set_cells(values);
+    value_tuple->set_names(specs);
+
+    CompositeTuple composite_tuple;
+    composite_tuple.add_tuple(std::move(value_tuple));
+    group_value_ = make_unique<GroupValueType>(AggregatorList{}, std::move(composite_tuple));
   }
 
   emitted_ = true;
-
   return RC::SUCCESS;
 }
 
 RC ScalarGroupByPhysicalOperator::close()
 {
+  RC rc = RC::SUCCESS;
+  if (!children_.empty()) {
+    rc = children_[0]->close();
+  }
   group_value_.reset();
   emitted_ = false;
-  return RC::SUCCESS;
+  return rc;
 }
 
 Tuple *ScalarGroupByPhysicalOperator::current_tuple()

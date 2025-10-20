@@ -12,8 +12,6 @@ See the Mulan PSL v2 for more details. */
 // Created by WangYunlai on 2023/06/28.
 //
 
-#include <regex>
-
 #include "common/value.h"
 
 #include "common/lang/comparator.h"
@@ -346,12 +344,35 @@ bool Value::LIKE(const Value &other) const
   const std::string  left_str  = this->get_string();
   const std::string &right_str = other.get_string();
 
-  // 将 SQL 通配符转换为正则表达式
-  std::string regex_str = std::regex_replace(right_str, std::regex("%"), ".*");
-  regex_str             = std::regex_replace(regex_str, std::regex("_"), ".");
+  // 基于通配符的匹配实现，支持 SQL 的 %（任意长度）和 _（单字符）
+  size_t text_pos       = 0;
+  size_t pattern_pos    = 0;
+  size_t text_len       = left_str.size();
+  size_t pattern_len    = right_str.size();
+  size_t percent_index  = std::string::npos;
+  size_t percent_match  = 0;
 
-  std::regex regex_pattern(regex_str);
-  return std::regex_match(left_str, regex_pattern);
+  while (text_pos < text_len) {
+    if (pattern_pos < pattern_len &&
+        (right_str[pattern_pos] == '_' || right_str[pattern_pos] == left_str[text_pos])) {
+      ++text_pos;
+      ++pattern_pos;
+    } else if (pattern_pos < pattern_len && right_str[pattern_pos] == '%') {
+      percent_index = pattern_pos++;
+      percent_match = text_pos;
+    } else if (percent_index != std::string::npos) {
+      pattern_pos = percent_index + 1;
+      text_pos    = ++percent_match;
+    } else {
+      return false;
+    }
+  }
+
+  while (pattern_pos < pattern_len && right_str[pattern_pos] == '%') {
+    ++pattern_pos;
+  }
+
+  return pattern_pos == pattern_len;
 }
 
 int Value::get_int() const

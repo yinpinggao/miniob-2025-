@@ -25,22 +25,24 @@ GroupByPhysicalOperator::GroupByPhysicalOperator(vector<Expression *> &&expressi
 {
   aggregate_expressions_ = std::move(expressions);
   value_expressions_.reserve(aggregate_expressions_.size());
-  ranges::for_each(aggregate_expressions_, [this](Expression *expr) {
-    auto       *aggregate_expr = static_cast<AggregateFunctionExpr *>(expr);
-    Expression *child_expr     = aggregate_expr->child().get();
+  for (Expression *expr : aggregate_expressions_) {
+    auto *aggregate_expr = static_cast<AggregateFunctionExpr *>(expr);
+    ASSERT(aggregate_expr != nullptr, "aggregate expression should not be null");
+    Expression *child_expr = aggregate_expr->child().get();
     ASSERT(child_expr != nullptr, "aggregate expression must have a child expression");
     value_expressions_.emplace_back(child_expr);
-  });
+  }
 }
 
 void GroupByPhysicalOperator::create_aggregator_list(AggregatorList &aggregator_list)
 {
   aggregator_list.clear();
   aggregator_list.reserve(aggregate_expressions_.size());
-  ranges::for_each(aggregate_expressions_, [&aggregator_list](Expression *expr) {
+  for (Expression *expr : aggregate_expressions_) {
     auto *aggregate_expr = static_cast<AggregateFunctionExpr *>(expr);
+    ASSERT(aggregate_expr != nullptr, "aggregate expression should not be null");
     aggregator_list.emplace_back(aggregate_expr->create_aggregator());
-  });
+  }
 }
 
 RC GroupByPhysicalOperator::aggregate(AggregatorList &aggregator_list, const Tuple &tuple)
@@ -75,12 +77,25 @@ RC GroupByPhysicalOperator::evaluate(GroupValueType &group_value)
 {
   RC rc = RC::SUCCESS;
 
-  vector<TupleCellSpec> aggregator_names;
-  for (Expression *expr : aggregate_expressions_) {
-    aggregator_names.emplace_back(expr->name());
+  AggregatorList &aggregators           = get<0>(group_value);
+  if (aggregators.empty()) {
+    return rc;
   }
 
-  AggregatorList &aggregators           = get<0>(group_value);
+  vector<TupleCellSpec> aggregator_names;
+  aggregator_names.reserve(aggregate_expressions_.size());
+  for (Expression *expr : aggregate_expressions_) {
+    const char *name = expr->name();
+    if (name == nullptr || name[0] == '\0') {
+      name = expr->alias();
+    }
+    if ((name == nullptr || name[0] == '\0') && expr->type() == ExprType::AGGREGATION) {
+      auto *aggregate_expr = static_cast<AggregateFunctionExpr *>(expr);
+      name                 = aggregate_expr->child()->name();
+    }
+    aggregator_names.emplace_back(name == nullptr ? "" : name);
+  }
+
   CompositeTuple &composite_value_tuple = get<1>(group_value);
 
   ValueListTuple evaluated_tuple;
