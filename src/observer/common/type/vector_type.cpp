@@ -5,6 +5,7 @@
 #include "common/type/vector_type.h"
 
 #include "common/value.h"
+#include "common/utils.h"
 #include <iomanip>
 
 int VectorType::compare(const Value &left, const Value &right) const
@@ -37,13 +38,40 @@ int VectorType::compare(const Value &left, const Value &right) const
 
 RC VectorType::cast_to(const Value &val, AttrType type, Value &result, bool allow_type_promotion) const
 {
-  if (type == AttrType::CHARS) {
-    result = Value(val.to_string().c_str());
-    return RC::SUCCESS;
+  switch (type) {
+    case AttrType::VECTORS: {
+      result.set_value(val);
+      return RC::SUCCESS;
+    }
+    case AttrType::CHARS: {
+      std::string str;
+      RC          rc = to_string(val, str);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      result.reset();
+      result.set_type(AttrType::CHARS);
+      result.set_data(const_cast<char *>(str.c_str()), static_cast<int>(str.size()));
+      return RC::SUCCESS;
+    }
+    default: {
+      return RC::INVALID_ARGUMENT;
+    }
   }
-  return RC::INTERNAL;
 }
-RC  VectorType::set_value_from_str(Value &val, const string &data) const { return RC::UNIMPLEMENTED; }
+
+RC VectorType::set_value_from_str(Value &val, const string &data) const
+{
+  float *array  = nullptr;
+  int    length = 0;
+  RC     rc     = parse_vector_from_string(data.c_str(), array, length);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  val.set_vector(array, length);
+  return RC::SUCCESS;
+}
+
 int VectorType::cast_cost(AttrType type) { return DataType::cast_cost(type); }
 RC  VectorType::to_string(const Value &val, std::string &result) const
 {

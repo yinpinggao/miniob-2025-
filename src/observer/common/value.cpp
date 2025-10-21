@@ -30,8 +30,10 @@ Value::Value(bool val) { set_boolean(val); }
 
 Value::Value(const char *s, int len /*= 0*/)
 {
-  if (OB_SUCC(parse_vector_from_string(s, value_.vector_value_, length_))) {
-    set_vector();
+  float *vector_data = nullptr;
+  int    vector_len  = 0;
+  if (OB_SUCC(parse_vector_from_string(s, vector_data, vector_len))) {
+    set_vector(vector_data, vector_len);
   } else {
     set_string(s, len);
   }
@@ -45,12 +47,22 @@ Value::Value(const Value &other)
   this->length_    = other.length_;
   this->own_data_  = other.own_data_;
   this->is_null_   = other.is_null_;
-  // 如果是 null 值没必要拷贝 value，因为此时 value 是垃圾值
   if (!this->is_null_) {
     switch (this->attr_type_) {
       case AttrType::CHARS:
       case AttrType::TEXTS: {
         set_string_from_other(other);
+      } break;
+      case AttrType::VECTORS: {
+        if (other.length_ > 0 && other.value_.vector_value_ != nullptr) {
+          int   element_count = other.length_ / sizeof(float);
+          auto *data          = new float[element_count];
+          memcpy(data, other.value_.vector_value_, other.length_);
+          this->value_.vector_value_ = data;
+        } else {
+          this->value_.vector_value_ = nullptr;
+        }
+        this->own_data_ = true;
       } break;
       default: {
         this->value_ = other.value_;
@@ -67,6 +79,9 @@ Value::Value(Value &&other)
   this->is_null_   = other.is_null_;
   if (!this->is_null_) {
     this->value_ = other.value_;
+  }
+  if (this->attr_type_ == AttrType::VECTORS) {
+    other.value_.vector_value_ = nullptr;
   }
   other.own_data_ = false;
   other.length_   = 0;
@@ -87,6 +102,17 @@ Value &Value::operator=(const Value &other)
       case AttrType::CHARS:
       case AttrType::TEXTS: {
         set_string_from_other(other);
+      } break;
+      case AttrType::VECTORS: {
+        if (other.length_ > 0 && other.value_.vector_value_ != nullptr) {
+          int   element_count = other.length_ / sizeof(float);
+          auto *data          = new float[element_count];
+          memcpy(data, other.value_.vector_value_, other.length_);
+          this->value_.vector_value_ = data;
+        } else {
+          this->value_.vector_value_ = nullptr;
+        }
+        this->own_data_ = true;
       } break;
       default: {
         this->value_ = other.value_;
@@ -109,6 +135,9 @@ Value &Value::operator=(Value &&other)
   if (!this->is_null_) {
     this->value_ = other.value_;
   }
+  if (this->attr_type_ == AttrType::VECTORS) {
+    other.value_.vector_value_ = nullptr;
+  }
   other.own_data_ = false;
   other.length_   = 0;
   return *this;
@@ -124,6 +153,12 @@ void Value::reset()
         value_.pointer_value_ = nullptr;
       }
     } break;
+    case AttrType::VECTORS: {
+      if (own_data_ && value_.vector_value_ != nullptr) {
+        delete[] value_.vector_value_;
+        value_.vector_value_ = nullptr;
+      }
+    } break;
     default: break;
   }
 
@@ -131,6 +166,7 @@ void Value::reset()
   length_    = 0;
   own_data_  = false;
   is_null_   = false;
+  value_.int_value_ = 0;
 }
 
 void Value::set_data(char *data, int length)
@@ -159,8 +195,22 @@ void Value::set_data(char *data, int length)
       length_           = length;
     } break;
     case AttrType::VECTORS: {
-      value_.vector_value_ = (float *)data;
+      if (own_data_ && value_.vector_value_ != nullptr) {
+        delete[] value_.vector_value_;
+      }
+      if (length % sizeof(float) != 0) {
+        LOG_WARN("invalid vector length: %d", length);
+        value_.vector_value_ = nullptr;
+        length_              = 0;
+        own_data_            = false;
+        break;
+      }
+      int   element_count = length / sizeof(float);
+      auto *array         = new float[element_count];
+      memcpy(array, data, length);
+      value_.vector_value_ = array;
       length_              = length;
+      own_data_            = true;
     } break;
     default: {
       LOG_WARN("unknown data type: %d", attr_type_);
@@ -198,11 +248,6 @@ void Value::set_date(int val)
   attr_type_        = AttrType::DATES;
   value_.int_value_ = val;
   length_           = sizeof(val);
-}
-void Value::set_vector()
-{
-  attr_type_ = AttrType::VECTORS;
-  own_data_  = true;
 }
 void Value::set_string(const char *s, int len /*= 0*/)
 {
@@ -248,23 +293,33 @@ void Value::set_text(const char *s, int len /*= 65535*/)
 
 void Value::set_vector(float *array, int length)
 {
+  if (length < 0 || length % static_cast<int>(sizeof(float)) != 0) {
+    LOG_WARN("invalid vector length: %d", length);
+    if (array != nullptr) {
+      delete[] array;
+    }
+    reset();
+    return;
+  }
+
+  reset();
   attr_type_           = AttrType::VECTORS;
   length_              = length;
   value_.vector_value_ = array;
-
-  own_data_ = true;
+  own_data_            = true;
 }
 
 void Value::set_vector(const vector<float> &val)
 {
-  attr_type_           = AttrType::VECTORS;
-  length_              = val.size() * sizeof(float);
-  value_.vector_value_ = new float[length_];
-  for (size_t i = 0; i < val.size(); i++) {
-    value_.vector_value_[i] = val[i];
+  int   length = static_cast<int>(val.size() * sizeof(float));
+  float *data  = nullptr;
+  if (!val.empty()) {
+    data = new float[val.size()];
+    for (size_t i = 0; i < val.size(); i++) {
+      data[i] = val[i];
+    }
   }
-
-  own_data_ = true;
+  set_vector(data, length);
 }
 
 void Value::set_value(const Value &value)
@@ -287,6 +342,16 @@ void Value::set_value(const Value &value)
     } break;
     case AttrType::TEXTS: {
       set_text(value.get_string().c_str());
+    } break;
+    case AttrType::VECTORS: {
+      int   length = value.length_;
+      float *data  = nullptr;
+      if (length > 0 && value.value_.vector_value_ != nullptr) {
+        int element_count = length / sizeof(float);
+        data              = new float[element_count];
+        memcpy(data, value.value_.vector_value_, length);
+      }
+      set_vector(data, length);
     } break;
     default: {
       ASSERT(false, "got an invalid value type");

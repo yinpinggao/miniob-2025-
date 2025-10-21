@@ -521,6 +521,53 @@ RC ExpressionBinder::bind_function_expression(
     return RC::SUCCESS;
   }
 
+  if (0 == strcasecmp(function_name, "distance")) {
+    vector<unique_ptr<Expression>> child_bound_expressions;
+    for (auto &child_expr : unbound_function_expr->args()) {
+      rc = bind_expression(child_expr, child_bound_expressions);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+    }
+
+    if (child_bound_expressions.size() != 3) {
+      LOG_WARN("distance function expects 3 arguments, got %d", child_bound_expressions.size());
+      return RC::INVALID_ARGUMENT;
+    }
+
+    Value metric_value;
+    rc = child_bound_expressions[2]->try_get_value(metric_value);
+    if (OB_FAIL(rc) || metric_value.attr_type() != AttrType::CHARS) {
+      LOG_WARN("distance function requires literal string metric");
+      return RC::INVALID_ARGUMENT;
+    }
+
+    string metric = metric_value.get_string();
+    str_to_upper(metric);
+
+    NormalFunctionType distance_type;
+    if (metric == "EUCLIDEAN" || metric == "L2") {
+      distance_type = NormalFunctionType::L2_DISTANCE;
+    } else if (metric == "COSINE") {
+      distance_type = NormalFunctionType::COSINE_DISTANCE;
+    } else if (metric == "DOT" || metric == "INNER_PRODUCT") {
+      distance_type = NormalFunctionType::INNER_PRODUCT;
+    } else {
+      LOG_WARN("unsupported distance metric: %s", metric.c_str());
+      return RC::INVALID_ARGUMENT;
+    }
+
+    child_bound_expressions.pop_back();  // remove metric argument
+
+    string name = unbound_function_expr->name();
+    auto   func_expr =
+        make_unique<NormalFunctionExpr>(distance_type, "distance", std::move(child_bound_expressions));
+    func_expr->set_name(name);
+    func_expr->set_alias(unbound_function_expr->alias());
+    bound_expressions.emplace_back(std::move(func_expr));
+    return RC::SUCCESS;
+  }
+
   NormalFunctionType func_type;
   rc = NormalFunctionExpr::type_from_string(function_name, func_type);
   if (OB_SUCC(rc)) {

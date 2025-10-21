@@ -278,14 +278,21 @@ public:
       }
     }
 
-    char *data = new char[data_len];
-    memcpy(data, data_ + field_offset, data_len);
-    value.set_data(data, data_len);
+    const char *raw_data = data_ + field_offset;
 
-    // vector 不释放内存
-    if (!(field_meta.type() == AttrType::VECTORS)) {
-      delete[] data;
+    if (field_meta.type() == AttrType::VECTORS) {
+      if (data_len % static_cast<int>(sizeof(float)) != 0) {
+        LOG_ERROR("invalid vector data length. field=%s, len=%d", field_meta.name(), data_len);
+        return RC::INVALID_ARGUMENT;
+      }
+      value.set_data(const_cast<char *>(raw_data), data_len);
+      return RC::SUCCESS;
     }
+
+    char *data = new char[data_len];
+    memcpy(data, raw_data, data_len);
+    value.set_data(data, data_len);
+    delete[] data;
 
     return RC::SUCCESS;
   }

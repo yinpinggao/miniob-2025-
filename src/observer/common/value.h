@@ -148,7 +148,6 @@ private:
   void set_text(const char *s, int len = 65535);
   void set_vector(float *array, int length);
   void set_vector(const vector<float> &val);
-  void set_vector();
   void set_string_from_other(const Value &other);
 
 private:

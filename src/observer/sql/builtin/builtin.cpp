@@ -311,8 +311,8 @@ RC distance(const std::vector<Value> &args, Value &result, NormalFunctionType ty
        */
       float ans = 0.0;
       for (int i = 0; i < v0_length; i++) {
-        float v0 = args[0].get_vector_element(i);
-        float v1 = args[1].get_vector_element(i);
+        float v0 = value0.get_vector_element(i);
+        float v1 = value1.get_vector_element(i);
         ans += (v0 - v1) * (v0 - v1);
       }
       ans    = sqrt(ans);
@@ -331,8 +331,8 @@ RC distance(const std::vector<Value> &args, Value &result, NormalFunctionType ty
       float norm_v1     = 0.0;
 
       for (int i = 0; i < v0_length; i++) {
-        float v0 = args[0].get_vector_element(i);
-        float v1 = args[1].get_vector_element(i);
+        float v0 = value0.get_vector_element(i);
+        float v1 = value1.get_vector_element(i);
         dot_product += v0 * v1;  // 计算点积
         norm_v0 += v0 * v0;      // 计算 v0 的模长平方
         norm_v1 += v1 * v1;      // 计算 v1 的模长平方
@@ -356,8 +356,8 @@ RC distance(const std::vector<Value> &args, Value &result, NormalFunctionType ty
       float dot_product = 0.0;
 
       for (int i = 0; i < v0_length; i++) {
-        float v0 = args[0].get_vector_element(i);
-        float v1 = args[1].get_vector_element(i);
+        float v0 = value0.get_vector_element(i);
+        float v1 = value1.get_vector_element(i);
         dot_product += v0 * v1;  // 对应元素相乘并求和
       }
 
@@ -449,7 +449,10 @@ RC vector_to_string(const vector<Value> &args, Value &result)
   if (args[0].attr_type() != AttrType::VECTORS) {
     return RC::INVALID_ARGUMENT;
   }
-  result = Value(args[0].to_string().c_str());
+  std::string vec_str = args[0].to_string();
+  result.reset();
+  result.set_type(AttrType::CHARS);
+  result.set_data(const_cast<char *>(vec_str.c_str()), static_cast<int>(vec_str.size()));
   return RC::SUCCESS;
 }
 
