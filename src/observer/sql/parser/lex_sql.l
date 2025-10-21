@@ -134,6 +134,8 @@ INNER                                   RETURN_TOKEN(INNER);
 JOIN                                    RETURN_TOKEN(JOIN);
 VIEW                                    RETURN_TOKEN(VIEW);
 WITH                                    RETURN_TOKEN(WITH);
+STRING_TO_VECTOR                        RETURN_TOKEN(STRING_TO_VECTOR);
+VECTOR_TO_STRING                        RETURN_TOKEN(VECTOR_TO_STRING);
 DISTANCE                                RETURN_TOKEN(DISTANCE);
 TYPE                                    RETURN_TOKEN(TYPE);
 LISTS                                   RETURN_TOKEN(LISTS);

@@ -117,24 +117,26 @@ extern int yydebug;
     JOIN = 318,                    /* JOIN  */
     VIEW = 319,                    /* VIEW  */
     WITH = 320,                    /* WITH  */
-    DISTANCE = 321,                /* DISTANCE  */
-    TYPE = 322,                    /* TYPE  */
-    LISTS = 323,                   /* LISTS  */
-    PROBES = 324,                  /* PROBES  */
-    IVFFLAT = 325,                 /* IVFFLAT  */
-    EQ = 326,                      /* EQ  */
-    LT = 327,                      /* LT  */
-    GT = 328,                      /* GT  */
-    LE = 329,                      /* LE  */
-    GE = 330,                      /* GE  */
-    NE = 331,                      /* NE  */
-    LIKE = 332,                    /* LIKE  */
-    IS = 333,                      /* IS  */
-    NUMBER = 334,                  /* NUMBER  */
-    FLOAT = 335,                   /* FLOAT  */
-    ID = 336,                      /* ID  */
-    SSS = 337,                     /* SSS  */
-    UMINUS = 338                   /* UMINUS  */
+    STRING_TO_VECTOR = 321,        /* STRING_TO_VECTOR  */
+    VECTOR_TO_STRING = 322,        /* VECTOR_TO_STRING  */
+    DISTANCE = 323,                /* DISTANCE  */
+    TYPE = 324,                    /* TYPE  */
+    LISTS = 325,                   /* LISTS  */
+    PROBES = 326,                  /* PROBES  */
+    IVFFLAT = 327,                 /* IVFFLAT  */
+    EQ = 328,                      /* EQ  */
+    LT = 329,                      /* LT  */
+    GT = 330,                      /* GT  */
+    LE = 331,                      /* LE  */
+    GE = 332,                      /* GE  */
+    NE = 333,                      /* NE  */
+    LIKE = 334,                    /* LIKE  */
+    IS = 335,                      /* IS  */
+    NUMBER = 336,                  /* NUMBER  */
+    FLOAT = 337,                   /* FLOAT  */
+    ID = 338,                      /* ID  */
+    SSS = 339,                     /* SSS  */
+    UMINUS = 340                   /* UMINUS  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -143,7 +145,7 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 175 "yacc_sql.y"
+#line 177 "yacc_sql.y"
 
   ParsedSqlNode *                            sql_node;
   Value *                                    value;
@@ -174,7 +176,7 @@ union YYSTYPE
   float                                      digits;
   std::vector<float> *                       digits_list;
 
-#line 178 "yacc_sql.hpp"
+#line 180 "yacc_sql.hpp"
 
 };
 typedef union YYSTYPE YYSTYPE;

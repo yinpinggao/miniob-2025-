@@ -157,6 +157,8 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
         JOIN
         VIEW
         WITH
+        STRING_TO_VECTOR
+        VECTOR_TO_STRING
         DISTANCE
         TYPE
         LISTS
@@ -745,49 +747,38 @@ nonnegative_value:
     | LSBRACE digits_list RSBRACE {
       $$ = new Value(*$2);
     }
-    | ID LBRACE value_list RBRACE {
+    | STRING_TO_VECTOR LBRACE value_list RBRACE {
       Value *val = nullptr;
-      if (0 == strcasecmp($1, "string_to_vector")) {
-        if ($3 == nullptr || $3->size() != 1) {
-          LOG_WARN("string_to_vector expects exactly one argument");
-          delete $3;
-          free($1);
-          YYERROR;
-        }
-        Value tmp;
-        RC    rc = Value::cast_to((*$3)[0], AttrType::VECTORS, tmp);
+      if ($3 == nullptr || $3->size() != 1) {
+        LOG_WARN("string_to_vector expects exactly one argument");
         delete $3;
-        if (rc != RC::SUCCESS) {
-          LOG_WARN("failed to cast argument to vector. rc=%d", static_cast<int>(rc));
-          free($1);
-          YYERROR;
-        }
-        val = new Value(tmp);
-      } else if (0 == strcasecmp($1, "vector_to_string")) {
-        if ($3 == nullptr || $3->size() != 1) {
-          LOG_WARN("vector_to_string expects exactly one argument");
-          delete $3;
-          free($1);
-          YYERROR;
-        }
-        Value tmp;
-        RC    rc = Value::cast_to((*$3)[0], AttrType::CHARS, tmp);
-        delete $3;
-        if (rc != RC::SUCCESS) {
-          LOG_WARN("failed to cast argument to string. rc=%d", static_cast<int>(rc));
-          free($1);
-          YYERROR;
-        }
-        val = new Value(tmp);
-      } else {
-        LOG_WARN("unsupported function '%s' in value list", $1);
-        if ($3 != nullptr) {
-          delete $3;
-        }
-        free($1);
         YYERROR;
       }
-      free($1);
+      Value tmp;
+      RC    rc = Value::cast_to((*$3)[0], AttrType::VECTORS, tmp);
+      delete $3;
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to cast argument to vector. rc=%d", static_cast<int>(rc));
+        YYERROR;
+      }
+      val = new Value(tmp);
+      $$  = val;
+    }
+    | VECTOR_TO_STRING LBRACE value_list RBRACE {
+      Value *val = nullptr;
+      if ($3 == nullptr || $3->size() != 1) {
+        LOG_WARN("vector_to_string expects exactly one argument");
+        delete $3;
+        YYERROR;
+      }
+      Value tmp;
+      RC    rc = Value::cast_to((*$3)[0], AttrType::CHARS, tmp);
+      delete $3;
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to cast argument to string. rc=%d", static_cast<int>(rc));
+        YYERROR;
+      }
+      val = new Value(tmp);
       $$ = val;
     }
     ;
@@ -1035,6 +1026,16 @@ func_expr:
     | DISTANCE LBRACE expression_list RBRACE
     {
         $$ = new UnboundFunctionExpr("distance", std::move(*$3));
+        $$->set_name(token_name(sql_string, &@$));
+    }
+    | STRING_TO_VECTOR LBRACE expression_list RBRACE
+    {
+        $$ = new UnboundFunctionExpr("string_to_vector", std::move(*$3));
+        $$->set_name(token_name(sql_string, &@$));
+    }
+    | VECTOR_TO_STRING LBRACE expression_list RBRACE
+    {
+        $$ = new UnboundFunctionExpr("vector_to_string", std::move(*$3));
         $$->set_name(token_name(sql_string, &@$));
     }
     ;
