@@ -266,34 +266,20 @@ RC distance(const std::vector<Value> &args, Value &result, NormalFunctionType ty
   if (args.size() != 2) {
     return RC::INVALID_ARGUMENT;
   }
-  if (args[0].attr_type() != AttrType::VECTORS && args[0].attr_type() != AttrType::CHARS) {
-    return RC::INVALID_ARGUMENT;
+  if (args[0].is_null() || args[1].is_null()) {
+    result = Value(NullValue());
+    return RC::SUCCESS;
   }
-  if (args[1].attr_type() != AttrType::VECTORS && args[1].attr_type() != AttrType::CHARS) {
-    return RC::INVALID_ARGUMENT;
-  }
-
-  Value value0, value1;
-  if (args[0].attr_type() == AttrType::CHARS) {
-    RC rc = Value::cast_to(args[0], AttrType::VECTORS, value0);
-    if (OB_FAIL(rc)) {
-      return rc;
-    }
-  } else if (args[0].attr_type() == AttrType::VECTORS) {
-    value0 = args[0];
-  } else {
-    return RC::INVALID_ARGUMENT;
+  Value value0;
+  RC    rc = Value::cast_to(args[0], AttrType::VECTORS, value0);
+  if (OB_FAIL(rc)) {
+    return rc;
   }
 
-  if (args[1].attr_type() == AttrType::CHARS) {
-    RC rc = Value::cast_to(args[1], AttrType::VECTORS, value1);
-    if (OB_FAIL(rc)) {
-      return rc;
-    }
-  } else if (args[1].attr_type() == AttrType::VECTORS) {
-    value1 = args[1];
-  } else {
-    return RC::INVALID_ARGUMENT;
+  Value value1;
+  rc = Value::cast_to(args[1], AttrType::VECTORS, value1);
+  if (OB_FAIL(rc)) {
+    return rc;
   }
 
   auto v0_length = value0.get_vector_length();
@@ -435,9 +421,11 @@ RC string_to_vector(const vector<Value> &args, Value &result)
   if (args.size() != 1) {
     return RC::INVALID_ARGUMENT;
   }
-  if (args[0].attr_type() != AttrType::CHARS) {
-    return RC::INVALID_ARGUMENT;
+  if (args[0].is_null()) {
+    result = Value(NullValue());
+    return RC::SUCCESS;
   }
+
   return Value::cast_to(args[0], AttrType::VECTORS, result);
 }
 
@@ -446,10 +434,18 @@ RC vector_to_string(const vector<Value> &args, Value &result)
   if (args.size() != 1) {
     return RC::INVALID_ARGUMENT;
   }
-  if (args[0].attr_type() != AttrType::VECTORS) {
-    return RC::INVALID_ARGUMENT;
+  if (args[0].is_null()) {
+    result = Value(NullValue());
+    return RC::SUCCESS;
   }
-  std::string vec_str = args[0].to_string();
+
+  Value vector_value;
+  RC    rc = Value::cast_to(args[0], AttrType::VECTORS, vector_value);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  std::string vec_str = vector_value.to_string();
   result.reset();
   result.set_type(AttrType::CHARS);
   result.set_data(const_cast<char *>(vec_str.c_str()), static_cast<int>(vec_str.size()));

@@ -7,6 +7,7 @@
 #include "common/value.h"
 #include "common/utils.h"
 #include <iomanip>
+#include <sstream>
 
 int VectorType::compare(const Value &left, const Value &right) const
 {
@@ -81,21 +82,20 @@ RC  VectorType::to_string(const Value &val, std::string &result) const
   // 计算数组中元素的数量
   int count = val.length() / sizeof(float);
 
-  // 使用字符串流来构建输出字符串
   std::ostringstream oss;
+  oss.setf(std::ios::scientific);
+  oss << std::setprecision(6);
   oss << "[";
 
-  // 遍历数组元素并拼接成字符串
   for (int i = 0; i < count; ++i) {
     if (i != 0) {
-      oss << ",";  // 在每个元素之间加逗号和空格
+      oss << ", ";
     }
-    oss << common::double_to_str(data[i]);
+    oss << data[i];
   }
 
-  oss << "]";  // 关闭数组的方括号
+  oss << "]";
 
-  // 将结果存储到 result 中
   result = oss.str();
 
   return RC::SUCCESS;
