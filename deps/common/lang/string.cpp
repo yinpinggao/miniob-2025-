@@ -17,7 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include <ctype.h>
 #include <errno.h>
 #include <string.h>
-
+#include<cmath>
 #include <iomanip>
 
 #include "common/log/log.h"
@@ -269,13 +269,22 @@ char *substr(const char *s, int n1, int n2)
  */
 string double_to_str(double v)
 {
+  int    sign     = (v >= 0.0) ? 1 : -1;
+  double abs_val  = std::fabs(v);
+  double scaled   = abs_val * 100.0;
+  double rounded  = std::floor(scaled + 0.5);
+  double result_v = (rounded / 100.0) * sign;
+  if (result_v == 0.0) {
+    result_v = 0.0;  // eliminate negative zero
+  }
+
   char buf[256];
-  snprintf(buf, sizeof(buf), "%.2f", v);
+  snprintf(buf, sizeof(buf), "%.2f", result_v);
   size_t len = strlen(buf);
-  while (buf[len - 1] == '0') {
+  while (len > 0 && buf[len - 1] == '0') {
     len--;
   }
-  if (buf[len - 1] == '.') {
+  if (len > 0 && buf[len - 1] == '.') {
     len--;
   }
 
