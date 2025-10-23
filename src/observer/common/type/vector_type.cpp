@@ -84,12 +84,12 @@ RC  VectorType::to_string(const Value &val, std::string &result) const
 
   std::ostringstream oss;
   oss.setf(std::ios::scientific);
-  oss << std::setprecision(6);
+  oss << std::setprecision(5);
   oss << "[";
 
   for (int i = 0; i < count; ++i) {
     if (i != 0) {
-      oss << ", ";
+      oss << ",";
     }
     oss << data[i];
   }
