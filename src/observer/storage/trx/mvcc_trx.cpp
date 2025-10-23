@@ -198,30 +198,68 @@ RC MvccTrx::delete_record(BaseTable *table, Record &record)
   return RC::SUCCESS;
 }
 
-RC MvccTrx::update_record(BaseTable *table, Record &old_record, Record &new_record)
+RC MvccTrx::update_record(
+    BaseTable *table, Record &old_record, Record &new_record)  // 涉及到update需要执行,提交前，还需要检测是否可见
 {
   Field begin_field;
   Field end_field;
   trx_fields(table, begin_field, end_field);
 
-  // 更新的处理和插入一样，begin 设置负值，但是 end 保持不变，因为可能遇到一个老事务对旧数据的修改
+  RC      visit_result     = RC::SUCCESS;
+  int32_t original_end_xid = trx_kit_.max_trx_id();
+  Record  old_version;
+  Record  new_version;
+
+  RC rc = table->visit_record(old_record.rid(),
+      [this, table, &visit_result, &old_version, &end_field, &original_end_xid](Record &inplace_record) -> bool {
+        RC visible_rc = this->visit_record(table, inplace_record, ReadWriteMode::READ_WRITE);
+        if (OB_FAIL(visible_rc)) {
+          visit_result = visible_rc;
+          return false;
+        }
+
+        old_version      = inplace_record.clone();
+        original_end_xid = end_field.get_int(old_version);
+        end_field.set_int(inplace_record, -trx_id_);
+        visit_result = RC::SUCCESS;
+        return true;
+      });
+
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to fetch record for update. table=%s, rid=%s, rc=%s",
+        table->name(), old_record.rid().to_string().c_str(), strrc(rc));
+    return rc;
+  }
+  if (OB_FAIL(visit_result)) {
+    LOG_TRACE("record not visible for update. table=%s, rid=%s, rc=%s",
+        table->name(), old_record.rid().to_string().c_str(), strrc(visit_result));
+    return visit_result;
+  }
+
   begin_field.set_int(new_record, -trx_id_);
   end_field.set_int(new_record, trx_kit_.max_trx_id());
 
-  RC rc = table->update_record(old_record, new_record);
-  if (rc != RC::SUCCESS) {
-    LOG_WARN("failed to insert record into table. rc=%s", strrc(rc));
+  rc = table->insert_record(new_record);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to insert new version while update. table=%s, rid=%s, rc=%s",
+        table->name(), old_record.rid().to_string().c_str(), strrc(rc));
+
+    RC revert_rc =
+        table->visit_record(old_record.rid(), [&end_field, original_end_xid](Record &inplace_record) -> bool {
+          end_field.set_int(inplace_record, original_end_xid);
+          return true;
+        });
+    if (OB_FAIL(revert_rc)) {
+      LOG_ERROR("failed to revert old version after update failure. table=%s, rid=%s, rc=%s",
+          table->name(), old_record.rid().to_string().c_str(), strrc(revert_rc));
+      return revert_rc;
+    }
     return rc;
   }
 
-  // 不实现故障恢复应该不用日志
-  // rc = log_handler_.insert_record(trx_id_, table, record.rid());
-  // ASSERT(rc == RC::SUCCESS, "failed to append insert record log. trx id=%d, table id=%d, rid=%s, record len=%d,
-  // rc=%s",
-  //        trx_id_, table->table_id(), record.rid().to_string().c_str(), record.len(), strrc(rc));
-
-  operations_.emplace_back(Operation::Type::UPDATE, table, old_record.rid(), old_record, new_record);
-  return rc;
+  new_version = new_record.clone();
+  operations_.emplace_back(Operation::Type::UPDATE, table, old_version.rid(), old_version, new_version);
+  return RC::SUCCESS;
 }
 
 RC MvccTrx::visit_record(BaseTable *table, Record &record, ReadWriteMode mode)
@@ -314,97 +352,105 @@ RC MvccTrx::commit()
   int32_t commit_id = trx_kit_.next_trx_id();
   return commit_with_trx_id(commit_id);
 }
-
+// 在事务提交阶段，update操作，将就记录标记为失效，将新纪录标记为生效
 RC MvccTrx::commit_with_trx_id(int32_t commit_xid)
 {
-  // TODO 原子性提交BUG：这里存在一个很大的问题，不能让其他事务一次性看到当前事务更新到的数据或同时看不到
-
-  // 当前事务在提交时，会逐个修改之前修改过的行数据，调整版本号。
-  // 这造成的问题是，在某个时刻，有些行数据的版本号已经修改了，有些还没有。那可能会存在一个事务，能够看到已经修改完成版本号的行，但是看不到未修改的行。
-  // 比如事务A，插入了3条数据，在提交的时候，逐个修改版本号，某个情况下可能会存在下面的场景(假设A的事务ID是90，commit
-  // id是100)：
-  //
-  // record	begin xid	end xid	data
-  //   R1	100	  +∞	    ...
-  //   R2	100	  +∞	    ...
-  //   R3	-90	  +∞	    ...
-  // 此时有一个新的事务，假设事务号是 110，那么它可以看到记录R1和R2，但是看不到R3，因为R3从记录状态来看，还没有提交。
-
   RC rc    = RC::SUCCESS;
   started_ = false;
 
   for (const Operation &operation : operations_) {
+    BaseTable *table = operation.table();
     switch (operation.type()) {
       case Operation::Type::INSERT: {
-        RID        rid   = operation.rid();
-        BaseTable *table = operation.table();
+        const RID &rid = operation.rid();
 
-        Field begin_xid_field, end_xid_field;
+        Field begin_xid_field;
+        Field end_xid_field;
         trx_fields(table, begin_xid_field, end_xid_field);
 
         auto record_updater = [this, &begin_xid_field, commit_xid](Record &record) -> bool {
           LOG_DEBUG("before commit insert record. trx id=%d, begin xid=%d, commit xid=%d, lbt=%s",
-                    trx_id_, begin_xid_field.get_int(record), commit_xid, lbt());
-          ASSERT(begin_xid_field.get_int(record) == -this->trx_id_ && (!recovering_), 
-                 "got an invalid record while committing. begin xid=%d, this trx id=%d", 
-                 begin_xid_field.get_int(record), trx_id_);
+              trx_id_, begin_xid_field.get_int(record), commit_xid, lbt());
+          ASSERT(begin_xid_field.get_int(record) == -trx_id_ && !recovering_,
+              "got an invalid record while committing. begin xid=%d, trx id=%d",
+              begin_xid_field.get_int(record), trx_id_);
 
           begin_xid_field.set_int(record, commit_xid);
           return true;
         };
 
-        rc = operation.table()->visit_record(rid, record_updater);
-        ASSERT(rc == RC::SUCCESS, "failed to get record while committing. rid=%s, rc=%s",
-               rid.to_string().c_str(), strrc(rc));
-      } break;
+        rc = table->visit_record(rid, record_updater);
+        ASSERT(rc == RC::SUCCESS,
+            "failed to update insert record while committing. rid=%s, rc=%s",
+            rid.to_string().c_str(), strrc(rc));
+        break;
+      }
 
       case Operation::Type::DELETE: {
-        RID        rid   = operation.rid();
-        BaseTable *table = operation.table();
+        const RID &rid = operation.rid();
 
-        Field begin_xid_field, end_xid_field;
+        Field begin_xid_field;
+        Field end_xid_field;
         trx_fields(table, begin_xid_field, end_xid_field);
 
         auto record_updater = [this, &end_xid_field, commit_xid](Record &record) -> bool {
-          (void)this;
-          ASSERT(end_xid_field.get_int(record) == -trx_id_, 
-                 "got an invalid record while committing. end xid=%d, this trx id=%d", 
-                 end_xid_field.get_int(record), trx_id_);
+          ASSERT(end_xid_field.get_int(record) == -trx_id_,
+              "got an invalid record while committing. end xid=%d, trx id=%d",
+              end_xid_field.get_int(record), trx_id_);
 
           end_xid_field.set_int(record, commit_xid);
           return true;
         };
 
-        rc = operation.table()->visit_record(rid, record_updater);
-        ASSERT(rc == RC::SUCCESS, "failed to get record while committing. rid=%s, rc=%s",
-               rid.to_string().c_str(), strrc(rc));
-      } break;
+        rc = table->visit_record(rid, record_updater);
+        ASSERT(rc == RC::SUCCESS,
+            "failed to update delete record while committing. rid=%s, rc=%s",
+            rid.to_string().c_str(), strrc(rc));
+        break;
+      }
 
       case Operation::Type::UPDATE: {
-        RID        rid   = operation.rid();
-        BaseTable *table = operation.table();
+        const Record &old_version = operation.old_record();
+        const Record &new_version = operation.updated_record();
+        const RID    &old_rid     = old_version.rid();
+        const RID    &new_rid     = new_version.rid();
 
-        Field begin_xid_field, end_xid_field;
-        trx_fields(table, begin_xid_field, end_xid_field);
+        Field begin_field;
+        Field end_field;
+        trx_fields(table, begin_field, end_field);
 
-        auto record_updater = [this, &begin_xid_field, commit_xid](Record &record) -> bool {
-          LOG_DEBUG("before commit update record. trx id=%d, begin xid=%d, commit xid=%d, lbt=%s",
-                   trx_id_, begin_xid_field.get_int(record), commit_xid, lbt());
-          ASSERT(begin_xid_field.get_int(record) == -trx_id_,
-                 "got an invalid record while committing. end xid=%d, this trx id=%d",
-                 begin_xid_field.get_int(record), trx_id_);
-
-          begin_xid_field.set_int(record, commit_xid);
+        auto old_updater = [this, &end_field, commit_xid](Record &record) -> bool {
+          ASSERT(end_field.get_int(record) == -trx_id_,
+              "invalid old version while committing. end xid=%d, trx id=%d",
+              end_field.get_int(record), trx_id_);
+          end_field.set_int(record, commit_xid);
           return true;
         };
 
-        rc = operation.table()->visit_record(rid, record_updater);
-        ASSERT(rc == RC::SUCCESS, "failed to get record while committing. rid=%s, rc=%s",
-               rid.to_string().c_str(), strrc(rc));
-      } break;
+        auto new_updater = [this, &begin_field, commit_xid](Record &record) -> bool {
+          ASSERT(begin_field.get_int(record) == -trx_id_,
+              "invalid new version while committing. begin xid=%d, trx id=%d",
+              begin_field.get_int(record), trx_id_);
+          begin_field.set_int(record, commit_xid);
+          return true;
+        };
+
+        rc = table->visit_record(old_rid, old_updater);
+        ASSERT(rc == RC::SUCCESS,
+            "failed to update old version while committing. rid=%s, rc=%s",
+            old_rid.to_string().c_str(), strrc(rc));
+
+        rc = table->visit_record(new_rid, new_updater);
+        ASSERT(rc == RC::SUCCESS,
+            "failed to update new version while committing. rid=%s, rc=%s",
+            new_rid.to_string().c_str(), strrc(rc));
+        break;
+      }
 
       default: {
-        ASSERT(false, "unsupported operation. type=%d", static_cast<int>(operation.type()));
+        LOG_PANIC("unsupported operation type while committing. type=%d",
+            static_cast<int>(operation.type()));
+        break;
       }
     }
   }
@@ -414,8 +460,8 @@ RC MvccTrx::commit_with_trx_id(int32_t commit_xid)
   }
 
   operations_.clear();
-
-  LOG_TRACE("append trx commit log. trx id=%d, commit_xid=%d, rc=%s", trx_id_, commit_xid, strrc(rc));
+  LOG_TRACE("append trx commit log. trx id=%d, commit_xid=%d, rc=%s",
+      trx_id_, commit_xid, strrc(rc));
   return rc;
 }
 
@@ -425,42 +471,42 @@ RC MvccTrx::rollback()
   started_ = false;
 
   for (auto &operation : std::ranges::reverse_view(operations_)) {
+    BaseTable *table = operation.table();
     switch (operation.type()) {
       case Operation::Type::INSERT: {
-        RID        rid   = operation.rid();
-        BaseTable *table = operation.table();
-        // 这里也可以不删除，仅仅给数据加个标识位，等垃圾回收器来收割也行
-
+        const RID &rid = operation.rid();
         if (recovering_) {
-          // 恢复的时候，需要额外判断下当前记录是否还是当前事务拥有。是的话才能删除记录
           Record record;
           rc = table->get_record(rid, record);
           if (OB_SUCC(rc)) {
-            Field begin_xid_field, end_xid_field;
+            Field begin_xid_field;
+            Field end_xid_field;
             trx_fields(table, begin_xid_field, end_xid_field);
             if (begin_xid_field.get_int(record) != -trx_id_) {
               continue;
             }
-          } else if (RC::RECORD_NOT_EXIST == rc) {
+          } else if (rc == RC::RECORD_NOT_EXIST) {
+            rc = RC::SUCCESS;
             continue;
           } else {
-            LOG_WARN("failed to get record while rollback. table=%s, rid=%s, rc=%s", 
-                     table->name(), rid.to_string().c_str(), strrc(rc));
+            LOG_WARN("failed to get record while rollback. table=%s, rid=%s, rc=%s",
+                table->name(), rid.to_string().c_str(), strrc(rc));
             return rc;
           }
         }
+
         rc = table->delete_record(rid);
-        ASSERT(rc == RC::SUCCESS, "failed to delete record while rollback. rid=%s, rc=%s",
-               rid.to_string().c_str(), strrc(rc));
-      } break;
+        ASSERT(rc == RC::SUCCESS,
+            "failed to delete insert record while rollback. rid=%s, rc=%s",
+            rid.to_string().c_str(), strrc(rc));
+        break;
+      }
 
       case Operation::Type::DELETE: {
-        RID        rid   = operation.rid();
-        BaseTable *table = operation.table();
+        const RID &rid = operation.rid();
 
-        ASSERT(rc == RC::SUCCESS, "failed to get record while rollback. rid=%s, rc=%s",
-              rid.to_string().c_str(), strrc(rc));
-        Field begin_xid_field, end_xid_field;
+        Field begin_xid_field;
+        Field end_xid_field;
         trx_fields(table, begin_xid_field, end_xid_field);
 
         auto record_updater = [this, &end_xid_field](Record &record) -> bool {
@@ -468,50 +514,79 @@ RC MvccTrx::rollback()
             return false;
           }
 
-          ASSERT(end_xid_field.get_int(record) == -trx_id_, 
-                "got an invalid record while rollback. end xid=%d, this trx id=%d", 
-                end_xid_field.get_int(record), trx_id_);
+          ASSERT(end_xid_field.get_int(record) == -trx_id_,
+              "got an invalid record while rollback. end xid=%d, trx id=%d",
+              end_xid_field.get_int(record), trx_id_);
 
           end_xid_field.set_int(record, trx_kit_.max_trx_id());
           return true;
         };
 
         rc = table->visit_record(rid, record_updater);
-        ASSERT(rc == RC::SUCCESS, "failed to get record while committing. rid=%s, rc=%s",
-               rid.to_string().c_str(), strrc(rc));
-      } break;
+        ASSERT(rc == RC::SUCCESS,
+            "failed to restore delete record while rollback. rid=%s, rc=%s",
+            rid.to_string().c_str(), strrc(rc));
+        break;
+      }
 
-      case Operation::Type::UPDATE: {
-        RID        rid   = operation.rid();
-        BaseTable *table = operation.table();
+      case Operation::Type::UPDATE: {  // 回滚阶段，将旧版本的 end_xid 从负值转为提交ID（正式标记失效），将新版本的
+                                       // begin_xid 从负值转为提交ID（正式生效）
+        const Record &old_version     = operation.old_record();
+        const Record &new_version     = operation.updated_record();
+        const RID    &old_rid         = old_version.rid();
+        const RID    &new_rid         = new_version.rid();
+        bool          need_remove_new = true;
 
         if (recovering_) {
-          // 恢复的时候，需要额外判断下当前记录是否还是当前事务拥有。是的话才能删除记录
           Record record;
-          rc = table->get_record(rid, record);
+          rc = table->get_record(new_rid, record);
           if (OB_SUCC(rc)) {
-            Field begin_xid_field, end_xid_field;
-            trx_fields(table, begin_xid_field, end_xid_field);
-            if (begin_xid_field.get_int(record) != -trx_id_) {
-              continue;
+            Field begin_field;
+            Field end_field;
+            trx_fields(table, begin_field, end_field);
+            if (begin_field.get_int(record) != -trx_id_) {
+              need_remove_new = false;
             }
-          } else if (RC::RECORD_NOT_EXIST == rc) {
-            continue;
+          } else if (rc == RC::RECORD_NOT_EXIST) {
+            need_remove_new = false;
+            rc              = RC::SUCCESS;
           } else {
-            LOG_WARN("failed to get record while rollback. table=%s, rid=%s, rc=%s",
-                     table->name(), rid.to_string().c_str(), strrc(rc));
+            LOG_WARN("failed to get new version while rollback. table=%s, rid=%s, rc=%s",
+                table->name(), new_rid.to_string().c_str(), strrc(rc));
             return rc;
           }
         }
 
-        // 直接用旧的记录的时间戳覆盖
-        rc = table->update_record(operation.updated_record(), operation.old_record());
-        ASSERT(rc == RC::SUCCESS, "failed to update record while rollback. rid=%s, rc=%s",
-               rid.to_string().c_str(), strrc(rc));
-      } break;
+        if (need_remove_new) {
+          rc = table->delete_record(new_version);
+          ASSERT(rc == RC::SUCCESS,
+              "failed to delete new version while rollback. rid=%s, rc=%s",
+              new_rid.to_string().c_str(), strrc(rc));
+        }
+
+        Field begin_field;
+        Field end_field;
+        trx_fields(table, begin_field, end_field);
+
+        auto recoverer = [this, &end_field](Record &record) -> bool {
+          if (recovering_ && end_field.get_int(record) != -trx_id_) {
+            return false;
+          }
+          end_field.set_int(record, trx_kit_.max_trx_id());
+          return true;
+        };
+
+        rc = table->visit_record(old_rid, recoverer);
+        ASSERT(rc == RC::SUCCESS,
+            "failed to restore old version while rollback. rid=%s, rc=%s",
+            old_rid.to_string().c_str(), strrc(rc));
+        break;
+      }
 
       default: {
-        ASSERT(false, "unsupported operation. type=%d", static_cast<int>(operation.type()));
+        LOG_PANIC("unsupported operation type while rollback. type=%d",
+            static_cast<int>(operation.type()));
+        break;
       }
     }
   }

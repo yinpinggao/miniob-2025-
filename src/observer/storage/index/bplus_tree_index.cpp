@@ -13,9 +13,15 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "storage/index/bplus_tree_index.h"
+
+#include <memory>
+
 #include "common/log/log.h"
-#include "storage/table/table.h"
+#include "session/session.h"
 #include "storage/db/db.h"
+#include "storage/field/field.h"
+#include "storage/table/table.h"
+#include "storage/trx/trx.h"
 
 BplusTreeIndex::~BplusTreeIndex() noexcept { close(); }
 
@@ -82,7 +88,8 @@ RC BplusTreeIndex::close()
 
 RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 {
-  char *entry = index_meta_.make_entry_from_record(record);
+  std::unique_ptr<char[]> entry_guard(index_meta_.make_entry_from_record(record));
+  char                   *entry = entry_guard.get();
   if (index_meta_.unique()) {
     list<RID> entries;
     RC        rc = index_handler_.get_entry(entry, index_meta_.fields_total_len(), entries);
@@ -90,7 +97,35 @@ RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
       return rc;
     }
     if (!entries.empty()) {
-      return RC::RECORD_DUPLICATE_KEY;
+      bool     has_conflict = true;
+      Session *session      = Session::current_session();
+      Trx     *trx          = session != nullptr ? session->current_trx() : nullptr;
+      if (trx != nullptr && table_ != nullptr) {
+        has_conflict = false;
+        for (const RID &exist_rid : entries) {
+          Record exist_record;
+          rc = table_->get_record(exist_rid, exist_record);
+          if (OB_FAIL(rc)) {
+            has_conflict = true;
+            break;
+          }
+
+          rc = trx->visit_record(table_, exist_record, ReadWriteMode::READ_ONLY);
+          if (rc == RC::SUCCESS || rc == RC::LOCKED_CONCURRENCY_CONFLICT) {
+            has_conflict = true;
+            break;
+          }
+
+          if (rc != RC::RECORD_INVISIBLE) {
+            has_conflict = true;
+            break;
+          }
+        }
+      }
+
+      if (has_conflict) {
+        return RC::RECORD_DUPLICATE_KEY;
+      }
     }
   }
 
