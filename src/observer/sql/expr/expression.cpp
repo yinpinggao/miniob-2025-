@@ -250,6 +250,29 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value)
   DEFER(if (nullptr != left_subquery_expr) left_subquery_expr->close();
         if (nullptr != right_subquery_expr) right_subquery_expr->close(););
 
+  // Handle EXISTS/NOT EXISTS by only checking whether the right subquery returns rows
+  if (comp_ == EXISTS_OP || comp_ == NOT_EXISTS_OP) {
+    if (right_subquery_expr == nullptr) {
+      LOG_WARN("exists operator requires subquery expression on the right side.");
+      return RC::INVALID_ARGUMENT;
+    }
+
+    Value exists_value;
+    rc           = right_subquery_expr->get_value(tuple, exists_value);
+    bool has_row = false;
+    if (rc == RC::SUCCESS) {
+      has_row = true;
+    } else if (rc == RC::RECORD_EOF) {
+      has_row = false;
+    } else {
+      LOG_WARN("failed to execute exists subquery. rc=%s", strrc(rc));
+      return rc;
+    }
+
+    value.set_boolean(comp_ == EXISTS_OP ? has_row : !has_row);
+    return RC::SUCCESS;
+  }
+
   // Get the value of the left expression
   rc = left_->get_value(tuple, left_value);
   if (rc != RC::SUCCESS && rc != RC::RECORD_EOF) {
@@ -772,7 +795,7 @@ RC SubQueryExpr::generate_select_stmt(Db *db, const std::unordered_map<std::stri
   }
 
   // 子查询不能有超过一个列
-  if (select_stmt->query_expressions_size() > 1) {
+  if (!allow_multi_column_ && select_stmt->query_expressions_size() > 1) {
     LOG_WARN("too many columns in subquery expression.");
     return RC::TO_LONG_SUBQUERY_EXPR;
   }
@@ -857,6 +880,83 @@ RC SubQueryExpr::try_get_value(Value &value) const { return RC::UNIMPLEMENTED; }
 ExprType SubQueryExpr::type() const { return ExprType::SUBQUERY; }
 
 AttrType SubQueryExpr::value_type() const { return AttrType::UNDEFINED; }
+
+//new exist class complete
+ExistsExpr::ExistsExpr(bool not_exists, SelectSqlNode &select_node)
+    : not_exists_(not_exists), subquery_expr_(std::make_unique<SubQueryExpr>(select_node))
+{
+  subquery_expr_->set_allow_multi_column(true);
+}
+
+ExistsExpr::ExistsExpr(bool not_exists, std::unique_ptr<SubQueryExpr> subquery_expr)
+    : not_exists_(not_exists), subquery_expr_(std::move(subquery_expr))
+{
+  if (subquery_expr_) {
+    subquery_expr_->set_allow_multi_column(true);
+  }
+}
+
+RC ExistsExpr::generate_select_stmt(Db *db, const std::unordered_map<std::string, BaseTable *> &tables)
+{
+  if (subquery_expr_ == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+  subquery_expr_->set_allow_multi_column(true);
+  return subquery_expr_->generate_select_stmt(db, tables);
+}
+
+RC ExistsExpr::generate_logical_oper()
+{
+  if (subquery_expr_ == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+  return subquery_expr_->generate_logical_oper();
+}
+
+RC ExistsExpr::generate_physical_oper()
+{
+  if (subquery_expr_ == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+  return subquery_expr_->generate_physical_oper();
+}
+
+RC ExistsExpr::reset()
+{
+  if (subquery_expr_ == nullptr) {
+    return RC::SUCCESS;
+  }
+  return subquery_expr_->reset();
+}
+
+RC ExistsExpr::get_value(const Tuple &tuple, Value &value)
+{
+  if (subquery_expr_ == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  RC rc = subquery_expr_->open(nullptr, tuple);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  DEFER(subquery_expr_->close());
+
+  Value dummy;
+  rc           = subquery_expr_->get_value(tuple, dummy);
+  bool has_row = false;
+  if (rc == RC::SUCCESS) {
+    has_row = true;
+  } else if (rc == RC::RECORD_EOF) {
+    has_row = false;
+    rc      = RC::SUCCESS;
+  } else {
+    return rc;
+  }
+
+  value.set_type(AttrType::BOOLEANS);
+  value.set_boolean(not_exists_ ? !has_row : has_row);
+  return rc;
+}
 
 ListExpr::ListExpr(std::vector<Expression *> &&exprs)
 {

@@ -320,6 +320,13 @@ RC ExpressionBinder::bind_comparison_expression(
     }
   }
   child_bound_expressions.clear();
+
+  //new
+  if ((comparison_expr->comp() == EXISTS_OP || comparison_expr->comp() == NOT_EXISTS_OP) && right_expr &&
+      right_expr->type() == ExprType::SUBQUERY) {
+    static_cast<SubQueryExpr *>(right_expr.get())->set_allow_multi_column(true);
+  }
+
   rc = bind_expression(right_expr, child_bound_expressions);
   if (rc != RC::SUCCESS) {
     return rc;

@@ -53,6 +53,7 @@ enum class ExprType
   AGGREGATION,       ///< 聚合运算
   NORMAL_FUNCTION,   ///< 普通函数
   SUBQUERY,          ///< 子查询
+  EXISTS,            ///< EXISTS子查询
   EXPRLIST           ///<  列表
 };
 
@@ -532,6 +533,9 @@ public:
   explicit SubQueryExpr(SelectSqlNode &select_node);
   virtual ~SubQueryExpr();
 
+  void set_allow_multi_column(bool allow) { allow_multi_column_ = allow; }
+  bool allow_multi_column() const { return allow_multi_column_; }
+
   RC   open(Trx *trx, const Tuple &tuple);
   RC   reset() override;
   RC   close();
@@ -563,7 +567,31 @@ private:
   std::unique_ptr<PhysicalOperator> physical_oper_;
 
   std::vector<Value> res_query;
-  size_t             visited_index = 0;
+  size_t             visited_index       = 0;
+  bool               allow_multi_column_ = false;
+};
+
+class ExistsExpr : public Expression
+{
+public:
+  ExistsExpr(bool not_exists, SelectSqlNode &select_node);
+  ExistsExpr(bool not_exists, std::unique_ptr<SubQueryExpr> subquery_expr);
+  ~ExistsExpr() override = default;
+
+  RC get_value(const Tuple &tuple, Value &value) override;
+  RC get_column(Chunk &chunk, Column &column) override { return RC::UNIMPLEMENTED; }
+  RC reset() override;
+
+  ExprType type() const override { return ExprType::EXISTS; }
+  AttrType value_type() const override { return AttrType::BOOLEANS; }
+
+  RC generate_select_stmt(Db *db, const std::unordered_map<std::string, BaseTable *> &tables);
+  RC generate_logical_oper();
+  RC generate_physical_oper();
+
+private:
+  bool                          not_exists_ = false;
+  std::unique_ptr<SubQueryExpr> subquery_expr_;
 };
 
 class ListExpr : public Expression

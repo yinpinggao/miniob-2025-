@@ -1133,6 +1133,12 @@ condition:
       Value val;
       val.set_null(true);
       ValueExpr *temp_expr = new ValueExpr(val);
+
+      // 新增
+      if (($1 == EXISTS_OP || $1 == NOT_EXISTS_OP) && $2->type() == ExprType::SUBQUERY) {
+        static_cast<SubQueryExpr *>($2)->set_allow_multi_column(true);
+      }
+
       $$ = new ComparisonExpr($1,temp_expr, $2);
     }
     | condition AND condition
