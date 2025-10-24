@@ -37,7 +37,8 @@ public:
 
 public:
   static RC create(Db *db, BaseTable *default_table, std::vector<std::string> tables_alias,
-      std::unordered_map<std::string, BaseTable *> *tables, std::unique_ptr<Expression> &condition, FilterStmt *&stmt);
+      std::unordered_map<std::string, BaseTable *> *tables, std::unique_ptr<Expression> &condition, FilterStmt *&stmt,
+      bool allow_aggregate = false);
 
   bool                         condition_empty() const { return nullptr == condition_; }
   std::unique_ptr<Expression> &condition() { return condition_; }

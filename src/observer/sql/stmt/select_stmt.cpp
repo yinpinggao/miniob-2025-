@@ -137,7 +137,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt,
   // create filter statement in `having` statement
   FilterStmt *having_filter_stmt = nullptr;
   rc                             = FilterStmt::create(
-      db, default_table, binder_context.alias(), &table_map, select_sql.having_conditions, having_filter_stmt);
+      db, default_table, binder_context.alias(), &table_map, select_sql.having_conditions, having_filter_stmt, true);
   if (rc != RC::SUCCESS) {
     LOG_WARN("cannot construct having filter stmt");
     return rc;

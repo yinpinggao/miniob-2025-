@@ -18,11 +18,39 @@ See the Mulan PSL v2 for more details. */
 #include "common/rc.h"
 #include "storage/db/db.h"
 #include "storage/table/table.h"
+#include "sql/expr/expression_iterator.h"
 
 FilterStmt::~FilterStmt() = default;
 
+namespace {
+
+bool contains_aggregate(Expression &expr)
+{
+  if (expr.type() == ExprType::AGGREGATION) {
+    return true;
+  }
+
+  bool found = false;
+  auto visitor = [&](std::unique_ptr<Expression> &child) -> RC {
+    if (contains_aggregate(*child)) {
+      found = true;
+      return RC::INVALID_ARGUMENT;
+    }
+    return RC::SUCCESS;
+  };
+
+  RC rc = ExpressionIterator::iterate_child_expr(expr, visitor);
+  if (rc == RC::INVALID_ARGUMENT) {
+    return true;
+  }
+  return found;
+}
+
+}  // namespace
+
 RC FilterStmt::create(Db *db, BaseTable *default_table, std::vector<std::string> tables_alias,
-    std::unordered_map<std::string, BaseTable *> *tables, std::unique_ptr<Expression> &condition, FilterStmt *&stmt)
+    std::unordered_map<std::string, BaseTable *> *tables, std::unique_ptr<Expression> &condition, FilterStmt *&stmt,
+    bool allow_aggregate)
 {
   RC rc = RC::SUCCESS;
   stmt  = nullptr;
@@ -54,6 +82,12 @@ RC FilterStmt::create(Db *db, BaseTable *default_table, std::vector<std::string>
   }
   FilterStmt *tmp_stmt = new FilterStmt();
   tmp_stmt->condition_ = std::move(cond_expressions[0]);
+
+  if (!allow_aggregate && contains_aggregate(*tmp_stmt->condition_)) {
+    LOG_WARN("aggregate function is not allowed in WHERE clause");
+    delete tmp_stmt;
+    return RC::INVALID_ARGUMENT;
+  }
 
   stmt = tmp_stmt;
   return rc;
