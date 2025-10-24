@@ -492,10 +492,16 @@ RC Table::drop_all_indexes(bool remove_files)
 static std::unique_ptr<Index> create_index_instance(IndexType type)
 {
   switch (type) {
-    case IndexType::BPlusTreeIndex: return std::make_unique<BplusTreeIndex>();
-    default: return nullptr;
+    case IndexType::BPlusTreeIndex: 
+      return std::make_unique<BplusTreeIndex>();
+    case IndexType::VectorIVFFlatIndex:
+      // 如果有向量索引的实现
+      return std::make_unique<IvfflatIndex>();
+    default: 
+      return nullptr;
   }
 }
+
 
 RC Table::rebuild_indexes(const std::vector<IndexMeta> &index_metas)
 {
@@ -508,13 +514,28 @@ RC Table::rebuild_indexes(const std::vector<IndexMeta> &index_metas)
       return RC::UNSUPPORTED;
     }
 
+    // 获取字段元数据 - 修正这里
+    if (index_meta.fields().empty()) {
+      LOG_ERROR("Index %s has no fields", index_meta.name());  // 去掉 .c_str()
+      return RC::SCHEMA_FIELD_MISSING;
+    }
+
+    const std::string &field_name = index_meta.fields()[0].name();  // 获取第一个字段名
+    const FieldMeta *field_meta = table_meta_.field(field_name.c_str());
+    if (field_meta == nullptr) {
+      LOG_ERROR("Field not found: %s", field_name.c_str());
+      return RC::SCHEMA_FIELD_NOT_EXIST;
+    }
+
     string index_file = table_index_file(base_dir_.c_str(), table_meta_.name(), index_meta.name());
     std::error_code ec;
     fs::remove(index_file, ec);
 
-    RC rc = index->create(this, index_file.c_str(), index_meta);
+    // 修正：传递4个参数
+    RC rc = index->create(this, index_file.c_str(), index_meta, *field_meta);
     if (OB_FAIL(rc)) {
       LOG_ERROR("failed to create index %s while rebuilding. rc=%s", index_meta.name(), strrc(rc));
+      index->close();
       return rc;
     }
 
@@ -566,10 +587,26 @@ RC Table::reload_existing_indexes(const std::vector<IndexMeta> &index_metas)
       return RC::UNSUPPORTED;
     }
 
+    // 获取字段元数据 - 修正这里
+    if (index_meta.fields().empty()) {
+      LOG_ERROR("Index %s has no fields", index_meta.name());  // 去掉 .c_str()
+      return RC::SCHEMA_FIELD_MISSING;
+    }
+
+    const std::string &field_name = index_meta.fields()[0].name();  // 获取第一个字段名
+    const FieldMeta *field_meta = table_meta_.field(field_name.c_str());
+    if (field_meta == nullptr) {
+      LOG_ERROR("Field not found: %s", field_name.c_str());
+      return RC::SCHEMA_FIELD_NOT_EXIST;
+    }
+
     string index_file = table_index_file(base_dir_.c_str(), table_meta_.name(), index_meta.name());
-    RC     rc         = index->open(this, index_file.c_str(), index_meta);
+    
+    // 修正：传递4个参数
+    RC rc = index->open(this, index_file.c_str(), index_meta, *field_meta);
     if (OB_FAIL(rc)) {
       LOG_ERROR("failed to reopen index %s. rc=%s", index_meta.name(), strrc(rc));
+      index->close();
       return rc;
     }
 
@@ -746,11 +783,25 @@ RC Table::alter_drop_column(const std::string &column_name)
     return RC::SCHEMA_FIELD_NOT_EXIST;
   }
 
+  // 检查系统字段
   for (int i = 0; i < table_meta_.sys_field_num(); ++i) {
     if (0 == strcmp(table_meta_.field(i)->name(), column_name.c_str())) {
       return RC::INVALID_ARGUMENT;
     }
   }
+
+  // 检查是否有索引依赖该字段
+  for (int i = 0; i < table_meta_.index_num(); ++i) {
+    const IndexMeta *index_meta = table_meta_.index(i);
+    for (const FieldMeta &field_meta : index_meta->fields()) {
+      if (field_meta.name() == column_name) {
+        LOG_ERROR("Cannot drop column %s because it is used in index %s", 
+                 column_name.c_str(), index_meta->name());  // 去掉 .c_str()
+        return RC::SCHEMA_INDEX_EXIST;
+      }
+    }
+  }
+
 
   TableMeta new_meta(table_meta_);
   RC        rc = new_meta.remove_field(column_name);
@@ -810,8 +861,8 @@ RC Table::alter_change_column(const std::string &old_name, const std::string &ne
     }
   }
 
-  TableMeta new_meta(table_meta_);
-  RC        rc = new_meta.rename_field(old_name, new_name);
+TableMeta new_meta(table_meta_);
+  RC rc = new_meta.rename_field(old_name, new_name);
   if (OB_FAIL(rc)) {
     return rc;
   }
@@ -824,7 +875,9 @@ RC Table::alter_change_column(const std::string &old_name, const std::string &ne
 
   for (int i = 0; i < table_meta_.index_num(); ++i) {
     const IndexMeta *old_index = table_meta_.index(i);
-    IndexMeta        rebuilt_index;
+    IndexMeta rebuilt_index;
+    
+    // 使用新的辅助方法
     rc = build_index_meta_with_mapping(new_meta, *old_index, rebuilt_index, rename_map);
     if (OB_FAIL(rc)) {
       return rc;
@@ -832,21 +885,8 @@ RC Table::alter_change_column(const std::string &old_name, const std::string &ne
     new_indexes.push_back(std::move(rebuilt_index));
   }
 
-  new_meta.set_indexes(new_indexes);
-  table_meta_.swap(new_meta);
-  table_meta_.set_indexes(new_indexes);
-
-  rc = persist_table_meta(table_meta_, table_meta_.name());
-  if (OB_FAIL(rc)) {
-    return rc;
-  }
-
-  rc = reload_existing_indexes(new_indexes);
-  if (OB_FAIL(rc)) {
-    return rc;
-  }
-
-  rc = persist_table_meta(table_meta_, table_meta_.name());
+  // 使用 rewrite_table_storage 来确保数据一致性
+  rc = rewrite_table_storage(new_meta, rename_map, new_indexes);
   return rc;
 }
 

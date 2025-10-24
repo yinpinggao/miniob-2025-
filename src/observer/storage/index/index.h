@@ -50,6 +50,12 @@ public:
     return RC::UNSUPPORTED;
   }
 
+  // 添加 close 方法
+  virtual RC close() 
+  {
+    return RC::SUCCESS;  // 默认实现返回成功
+  }
+
   virtual bool is_vector_index() { return index_meta_.index_type() == IndexType::VectorIVFFlatIndex; }
 
   const IndexMeta &index_meta() const { return index_meta_; }
