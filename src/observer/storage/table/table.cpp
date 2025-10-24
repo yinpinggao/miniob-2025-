@@ -15,7 +15,14 @@ See the Mulan PSL v2 for more details. */
 #include <limits.h>
 #include <string.h>
 
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <system_error>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "common/defs.h"
 #include "common/lang/string.h"
@@ -35,6 +42,37 @@ See the Mulan PSL v2 for more details. */
 #include "storage/db/db.h"
 #include "storage/index/ivfflat_index.h"
 #include "sql/expr/expression.h"
+
+namespace fs = std::filesystem;
+
+namespace {
+
+RC build_index_meta_with_mapping(const TableMeta &new_meta,
+    const IndexMeta &old_index_meta,
+    IndexMeta &result,
+    const std::unordered_map<std::string, std::string> &field_name_mapping)
+{
+  std::vector<FieldMeta> new_fields;
+  new_fields.reserve(old_index_meta.fields().size());
+
+  for (const FieldMeta &field : old_index_meta.fields()) {
+    std::string lookup_name = field.name();
+    auto        iter        = field_name_mapping.find(lookup_name);
+    if (iter != field_name_mapping.end()) {
+      lookup_name = iter->second;
+    }
+
+    const FieldMeta *new_field = new_meta.field(lookup_name.c_str());
+    if (new_field == nullptr) {
+      return RC::SCHEMA_FIELD_NOT_EXIST;
+    }
+    new_fields.push_back(*new_field);
+  }
+
+  return result.init(old_index_meta.name(), old_index_meta.index_type(), new_fields, old_index_meta.unique());
+}
+
+}  // namespace
 
 Table::~Table()
 {
@@ -315,6 +353,588 @@ RC Table::init_record_handler(const char *base_dir)
   }
 
   return rc;
+}
+
+RC Table::close_record_handler()
+{
+  if (record_handler_ != nullptr) {
+    record_handler_->close();
+    delete record_handler_;
+    record_handler_ = nullptr;
+  }
+
+  if (data_buffer_pool_ != nullptr) {
+    string data_file = table_data_file(base_dir_.c_str(), table_meta_.name());
+    RC     rc        = db_->buffer_pool_manager().close_file(data_file.c_str());
+    if (OB_FAIL(rc) && rc != RC::INTERNAL) {
+      LOG_WARN("failed to close data file %s. rc=%s", data_file.c_str(), strrc(rc));
+      return rc;
+    }
+    data_buffer_pool_ = nullptr;
+  }
+
+  return RC::SUCCESS;
+}
+
+RC Table::reload_record_handler()
+{
+  return init_record_handler(base_dir_.c_str());
+}
+
+RC Table::persist_table_meta(const TableMeta &meta, const std::string &table_name)
+{
+  string meta_file = table_meta_file(base_dir_.c_str(), table_name.c_str());
+  string tmp_file  = meta_file + ".tmp";
+
+  std::error_code ec;
+  fs::remove(tmp_file, ec);
+
+  std::fstream fs;
+  fs.open(tmp_file, std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+  if (!fs.is_open()) {
+    LOG_ERROR("failed to open tmp meta file %s for write", tmp_file.c_str());
+    return RC::IOERR_OPEN;
+  }
+
+  if (meta.serialize(fs) < 0) {
+    LOG_ERROR("failed to serialize table meta to %s", tmp_file.c_str());
+    fs.close();
+    return RC::IOERR_WRITE;
+  }
+  fs.close();
+
+  if (rename(tmp_file.c_str(), meta_file.c_str()) != 0) {
+    LOG_ERROR("failed to rename meta tmp file %s to %s. err=%s", tmp_file.c_str(), meta_file.c_str(), strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+
+  return RC::SUCCESS;
+}
+
+RC Table::copy_record_to_new_layout(const TableMeta &src_meta,
+    const Record &src_record,
+    char *dest_buffer,
+    const TableMeta &dest_meta,
+    const std::unordered_map<std::string, std::string> &field_mapping)
+{
+  memset(dest_buffer, 0, dest_meta.record_size());
+
+  for (int i = 0; i < dest_meta.field_num(); ++i) {
+    const FieldMeta *dest_field = dest_meta.field(i);
+    if (dest_field == nullptr) {
+      continue;
+    }
+
+    std::string lookup_name;
+    if (i < dest_meta.sys_field_num()) {
+      lookup_name = dest_field->name();
+    } else {
+      auto iter = field_mapping.find(dest_field->name());
+      if (iter != field_mapping.end()) {
+        lookup_name = iter->second;
+      } else {
+        lookup_name = dest_field->name();
+      }
+    }
+
+    const FieldMeta *src_field = nullptr;
+    if (!lookup_name.empty()) {
+      src_field = src_meta.field(lookup_name.c_str());
+    }
+
+    char *dest_ptr = dest_buffer + dest_field->offset();
+    if (src_field != nullptr) {
+      const char *src_ptr = src_record.data() + src_field->offset();
+      int         copy_len = std::min(dest_field->len(), src_field->len());
+      memcpy(dest_ptr, src_ptr, copy_len);
+      if (dest_field->len() > src_field->len()) {
+        memset(dest_ptr + src_field->len(), 0, dest_field->len() - src_field->len());
+      }
+    } else {
+      memset(dest_ptr, 0, dest_field->len());
+      if (dest_field->nullable()) {
+        dest_ptr[dest_field->len() - 1] = '1';
+      }
+    }
+  }
+
+  return RC::SUCCESS;
+}
+
+RC Table::drop_all_indexes(bool remove_files)
+{
+  for (Index *index : indexes_) {
+    if (index != nullptr) {
+      index->close();
+      delete index;
+    }
+  }
+  indexes_.clear();
+
+  if (remove_files) {
+    for (int i = 0; i < table_meta_.index_num(); ++i) {
+      const IndexMeta *index_meta = table_meta_.index(i);
+      if (index_meta == nullptr) {
+        continue;
+      }
+      string index_file = table_index_file(base_dir_.c_str(), table_meta_.name(), index_meta->name());
+      std::error_code ec;
+      fs::remove(index_file, ec);
+      if (ec) {
+        LOG_WARN("failed to remove index file %s: %s", index_file.c_str(), ec.message().c_str());
+      }
+    }
+  }
+
+  return RC::SUCCESS;
+}
+
+static std::unique_ptr<Index> create_index_instance(IndexType type)
+{
+  switch (type) {
+    case IndexType::BPlusTreeIndex: return std::make_unique<BplusTreeIndex>();
+    default: return nullptr;
+  }
+}
+
+RC Table::rebuild_indexes(const std::vector<IndexMeta> &index_metas)
+{
+  indexes_.clear();
+
+  for (const IndexMeta &index_meta : index_metas) {
+    auto index = create_index_instance(index_meta.index_type());
+    if (!index) {
+      LOG_ERROR("unsupported index type when rebuilding index: %d", static_cast<int>(index_meta.index_type()));
+      return RC::UNSUPPORTED;
+    }
+
+    string index_file = table_index_file(base_dir_.c_str(), table_meta_.name(), index_meta.name());
+    std::error_code ec;
+    fs::remove(index_file, ec);
+
+    RC rc = index->create(this, index_file.c_str(), index_meta);
+    if (OB_FAIL(rc)) {
+      LOG_ERROR("failed to create index %s while rebuilding. rc=%s", index_meta.name(), strrc(rc));
+      return rc;
+    }
+
+    RecordFileScanner scanner;
+    rc = get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
+    if (OB_FAIL(rc)) {
+      index->close();
+      return rc;
+    }
+
+    Record record;
+    while ((rc = scanner.next(record)) == RC::SUCCESS) {
+      rc = index->insert_entry(record.data(), &record.rid());
+      if (OB_FAIL(rc)) {
+        LOG_ERROR("failed to insert record into index %s while rebuilding. rc=%s", index_meta.name(), strrc(rc));
+        scanner.close_scan();
+        index->close();
+        return rc;
+      }
+    }
+    if (rc != RC::RECORD_EOF) {
+      LOG_WARN("scanner aborted while rebuilding index %s. rc=%s", index_meta.name(), strrc(rc));
+      scanner.close_scan();
+      index->close();
+      return rc;
+    }
+    scanner.close_scan();
+
+    indexes_.push_back(index.release());
+  }
+
+  return RC::SUCCESS;
+}
+
+RC Table::reload_existing_indexes(const std::vector<IndexMeta> &index_metas)
+{
+  for (Index *index : indexes_) {
+    if (index != nullptr) {
+      index->close();
+      delete index;
+    }
+  }
+  indexes_.clear();
+
+  for (const IndexMeta &index_meta : index_metas) {
+    auto index = create_index_instance(index_meta.index_type());
+    if (!index) {
+      LOG_ERROR("unsupported index type when reloading index: %d", static_cast<int>(index_meta.index_type()));
+      return RC::UNSUPPORTED;
+    }
+
+    string index_file = table_index_file(base_dir_.c_str(), table_meta_.name(), index_meta.name());
+    RC     rc         = index->open(this, index_file.c_str(), index_meta);
+    if (OB_FAIL(rc)) {
+      LOG_ERROR("failed to reopen index %s. rc=%s", index_meta.name(), strrc(rc));
+      return rc;
+    }
+
+    indexes_.push_back(index.release());
+  }
+
+  return RC::SUCCESS;
+}
+
+RC Table::rewrite_table_storage(TableMeta &new_meta,
+    const std::unordered_map<std::string, std::string> &field_mapping,
+    const std::vector<IndexMeta> &new_index_metas)
+{
+  string data_file     = table_data_file(base_dir_.c_str(), table_meta_.name());
+  string tmp_data_file = data_file + ".tmp";
+  string backup_file   = data_file + ".bak";
+
+  BufferPoolManager &bpm = db_->buffer_pool_manager();
+  std::error_code    ec;
+  fs::remove(tmp_data_file, ec);
+
+  RC rc = bpm.create_file(tmp_data_file.c_str());
+  if (OB_FAIL(rc)) {
+    LOG_ERROR("failed to create tmp data file %s. rc=%s", tmp_data_file.c_str(), strrc(rc));
+    return rc;
+  }
+
+  DiskBufferPool *tmp_pool = nullptr;
+  rc                       = bpm.open_file(db_->log_handler(), tmp_data_file.c_str(), tmp_pool);
+  if (OB_FAIL(rc)) {
+    LOG_ERROR("failed to open tmp data file %s. rc=%s", tmp_data_file.c_str(), strrc(rc));
+    return rc;
+  }
+
+  TableMeta          temp_meta = new_meta;
+  RecordFileHandler  tmp_handler(temp_meta.storage_format());
+  rc = tmp_handler.init(*tmp_pool, db_->log_handler(), &temp_meta);
+  if (OB_FAIL(rc)) {
+    LOG_ERROR("failed to init tmp record handler. rc=%s", strrc(rc));
+    bpm.close_file(tmp_data_file.c_str());
+    return rc;
+  }
+
+  RecordFileScanner scanner;
+  rc = get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
+  if (OB_FAIL(rc)) {
+    LOG_ERROR("failed to open scanner on old data. rc=%s", strrc(rc));
+    tmp_handler.close();
+    bpm.close_file(tmp_data_file.c_str());
+    return rc;
+  }
+
+  std::vector<char> new_record(new_meta.record_size());
+  Record             record;
+
+  while ((rc = scanner.next(record)) == RC::SUCCESS) {
+    rc = copy_record_to_new_layout(table_meta_, record, new_record.data(), new_meta, field_mapping);
+    if (OB_FAIL(rc)) {
+      LOG_ERROR("failed to transform record during rewrite. rc=%s", strrc(rc));
+      scanner.close_scan();
+      tmp_handler.close();
+      bpm.close_file(tmp_data_file.c_str());
+      return rc;
+    }
+    RID rid;
+    rc = tmp_handler.insert_record(new_record.data(), new_meta.record_size(), &rid);
+    if (OB_FAIL(rc)) {
+      LOG_ERROR("failed to insert record to tmp file. rc=%s", strrc(rc));
+      scanner.close_scan();
+      tmp_handler.close();
+      bpm.close_file(tmp_data_file.c_str());
+      return rc;
+    }
+  }
+
+  if (rc != RC::RECORD_EOF) {
+    LOG_ERROR("unexpected rc while scanning old data: %s", strrc(rc));
+    scanner.close_scan();
+    tmp_handler.close();
+    bpm.close_file(tmp_data_file.c_str());
+    return rc;
+  }
+  scanner.close_scan();
+
+  tmp_handler.close();
+  tmp_pool->flush_all_pages();
+  bpm.close_file(tmp_data_file.c_str());
+
+  rc = drop_all_indexes(true);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = close_record_handler();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  fs::remove(backup_file, ec);
+  fs::rename(data_file, backup_file, ec);
+  if (ec) {
+    LOG_ERROR("failed to backup old data file %s: %s", data_file.c_str(), ec.message().c_str());
+    return RC::IOERR_WRITE;
+  }
+
+  fs::rename(tmp_data_file, data_file, ec);
+  if (ec) {
+    LOG_ERROR("failed to promote tmp data file %s: %s", tmp_data_file.c_str(), ec.message().c_str());
+    fs::rename(backup_file, data_file, ec);
+    return RC::IOERR_WRITE;
+  }
+
+  fs::remove(backup_file, ec);
+
+  new_meta.set_indexes(new_index_metas);
+  table_meta_.swap(new_meta);
+
+  rc = persist_table_meta(table_meta_, table_meta_.name());
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = reload_record_handler();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = rebuild_indexes(new_index_metas);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = persist_table_meta(table_meta_, table_meta_.name());
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  return RC::SUCCESS;
+}
+
+RC Table::alter_add_column(const AttrInfoSqlNode &attr_info)
+{
+  if (table_meta_.field(attr_info.name.c_str()) != nullptr) {
+    return RC::SCHEMA_FIELD_EXIST;
+  }
+
+  TableMeta new_meta(table_meta_);
+  RC        rc = new_meta.append_field(attr_info);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  std::vector<IndexMeta> new_indexes;
+  new_indexes.reserve(table_meta_.index_num());
+  std::unordered_map<std::string, std::string> identity;
+
+  for (int i = 0; i < table_meta_.index_num(); ++i) {
+    const IndexMeta *old_index = table_meta_.index(i);
+    IndexMeta        rebuilt_index;
+    rc = build_index_meta_with_mapping(new_meta, *old_index, rebuilt_index, identity);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    new_indexes.push_back(std::move(rebuilt_index));
+  }
+
+  rc = rewrite_table_storage(new_meta, identity, new_indexes);
+  return rc;
+}
+
+RC Table::alter_drop_column(const std::string &column_name)
+{
+  if (table_meta_.field(column_name.c_str()) == nullptr) {
+    return RC::SCHEMA_FIELD_NOT_EXIST;
+  }
+
+  for (int i = 0; i < table_meta_.sys_field_num(); ++i) {
+    if (0 == strcmp(table_meta_.field(i)->name(), column_name.c_str())) {
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
+  TableMeta new_meta(table_meta_);
+  RC        rc = new_meta.remove_field(column_name);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  if (new_meta.field_num() - new_meta.sys_field_num() <= 0) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  std::vector<IndexMeta> new_indexes;
+  std::unordered_map<std::string, std::string> identity;
+
+  for (int i = 0; i < table_meta_.index_num(); ++i) {
+    const IndexMeta *old_index = table_meta_.index(i);
+    bool             contains  = false;
+    for (const FieldMeta &idx_field : old_index->fields()) {
+      if (column_name == idx_field.name()) {
+        contains = true;
+        break;
+      }
+    }
+    if (contains) {
+      continue;
+    }
+
+    IndexMeta rebuilt_index;
+    rc = build_index_meta_with_mapping(new_meta, *old_index, rebuilt_index, identity);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    new_indexes.push_back(std::move(rebuilt_index));
+  }
+
+  rc = rewrite_table_storage(new_meta, identity, new_indexes);
+  return rc;
+}
+
+RC Table::alter_change_column(const std::string &old_name, const std::string &new_name)
+{
+  if (old_name == new_name) {
+    return RC::SUCCESS;
+  }
+
+  if (table_meta_.field(old_name.c_str()) == nullptr) {
+    return RC::SCHEMA_FIELD_NOT_EXIST;
+  }
+
+  if (table_meta_.field(new_name.c_str()) != nullptr) {
+    return RC::SCHEMA_FIELD_EXIST;
+  }
+
+  for (int i = 0; i < table_meta_.sys_field_num(); ++i) {
+    if (0 == strcmp(table_meta_.field(i)->name(), old_name.c_str())) {
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
+  TableMeta new_meta(table_meta_);
+  RC        rc = new_meta.rename_field(old_name, new_name);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  std::unordered_map<std::string, std::string> rename_map;
+  rename_map[old_name] = new_name;
+
+  std::vector<IndexMeta> new_indexes;
+  new_indexes.reserve(table_meta_.index_num());
+
+  for (int i = 0; i < table_meta_.index_num(); ++i) {
+    const IndexMeta *old_index = table_meta_.index(i);
+    IndexMeta        rebuilt_index;
+    rc = build_index_meta_with_mapping(new_meta, *old_index, rebuilt_index, rename_map);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    new_indexes.push_back(std::move(rebuilt_index));
+  }
+
+  new_meta.set_indexes(new_indexes);
+  table_meta_.swap(new_meta);
+  table_meta_.set_indexes(new_indexes);
+
+  rc = persist_table_meta(table_meta_, table_meta_.name());
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = reload_existing_indexes(new_indexes);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = persist_table_meta(table_meta_, table_meta_.name());
+  return rc;
+}
+
+RC Table::alter_rename_table(const std::string &new_name)
+{
+  if (table_meta_.name() == new_name) {
+    return RC::SUCCESS;
+  }
+
+  if (common::is_blank(new_name.c_str())) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  std::vector<IndexMeta> index_metas;
+  index_metas.reserve(table_meta_.index_num());
+  for (int i = 0; i < table_meta_.index_num(); ++i) {
+    index_metas.push_back(*table_meta_.index(i));
+  }
+
+  RC rc = drop_all_indexes(false);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = close_record_handler();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  string old_name      = table_meta_.name();
+  string old_meta_file = table_meta_file(base_dir_.c_str(), old_name.c_str());
+  string new_meta_file = table_meta_file(base_dir_.c_str(), new_name.c_str());
+  string old_data_file = table_data_file(base_dir_.c_str(), old_name.c_str());
+  string new_data_file = table_data_file(base_dir_.c_str(), new_name.c_str());
+
+  std::error_code ec;
+  fs::rename(old_data_file, new_data_file, ec);
+  if (ec) {
+    LOG_ERROR("failed to rename data file to %s: %s", new_data_file.c_str(), ec.message().c_str());
+    return RC::IOERR_WRITE;
+  }
+
+  fs::rename(old_meta_file, new_meta_file, ec);
+  if (ec) {
+    LOG_ERROR("failed to rename meta file to %s: %s", new_meta_file.c_str(), ec.message().c_str());
+    fs::rename(new_data_file, old_data_file, ec);
+    return RC::IOERR_WRITE;
+  }
+
+  std::vector<std::pair<std::string, std::string>> renamed_index_files;
+  renamed_index_files.reserve(index_metas.size());
+
+  for (const IndexMeta &index_meta : index_metas) {
+    string old_index = table_index_file(base_dir_.c_str(), old_name.c_str(), index_meta.name());
+    string new_index = table_index_file(base_dir_.c_str(), new_name.c_str(), index_meta.name());
+    fs::rename(old_index, new_index, ec);
+    if (ec) {
+      LOG_ERROR("failed to rename index file %s: %s", old_index.c_str(), ec.message().c_str());
+      for (const auto &entry : renamed_index_files) {
+        std::error_code revert_ec;
+        fs::rename(entry.second, entry.first, revert_ec);
+      }
+      fs::rename(new_meta_file, old_meta_file, ec);
+      fs::rename(new_data_file, old_data_file, ec);
+      return RC::IOERR_WRITE;
+    }
+    renamed_index_files.emplace_back(std::move(old_index), std::move(new_index));
+  }
+
+  table_meta_.set_name(new_name);
+  table_meta_.set_indexes(index_metas);
+
+  rc = persist_table_meta(table_meta_, new_name);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = reload_record_handler();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = reload_existing_indexes(index_metas);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  return RC::SUCCESS;
 }
 
 RC Table::get_record_scanner(RecordFileScanner &scanner, Trx *trx, ReadWriteMode mode)

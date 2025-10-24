@@ -100,13 +100,16 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
         BY
         CREATE
         DROP
+        ALTER
         EXISTS
         GROUP
         HAVING
         ORDER
         TABLE
         TABLES
+        ADD
         INDEX
+        COLUMN
         CALC
         SELECT
         DESC
@@ -163,6 +166,7 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
         VECTOR_TO_STRING
         DISTANCE
         TYPE
+        CHANGE
         LISTS
         PROBES
         IVFFLAT
@@ -174,6 +178,8 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
         NE
         LIKE
         IS
+        RENAME
+        TO
 
 /** union 中定义各种数据类型，真实生成的代码也是union类型，所以不能有非POD类型的数据 **/
 %union {
@@ -261,6 +267,7 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
 %type <sql_node>            delete_stmt
 %type <sql_node>            create_table_stmt
 %type <sql_node>            drop_table_stmt
+%type <sql_node>            alter_table_stmt
 %type <sql_node>            show_tables_stmt
 %type <sql_node>            desc_table_stmt
 %type <sql_node>            create_index_stmt
@@ -303,6 +310,7 @@ command_wrapper:
   | delete_stmt
   | create_table_stmt
   | drop_table_stmt
+  | alter_table_stmt
   | show_tables_stmt
   | desc_table_stmt
   | create_index_stmt
@@ -361,6 +369,53 @@ drop_table_stmt:    /*drop table 语句的语法解析树*/
       $$->drop_table.relation_name = $3;
       free($3);
     };
+
+alter_table_stmt:
+      ALTER TABLE ID ADD COLUMN attr_def
+    {
+      $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
+      AlterTableSqlNode &alter_table = $$->alter_table;
+      alter_table.table_name         = $3;
+      alter_table.alter_type         = AlterType::ADD_COLUMN;
+      if ($6 != nullptr) {
+        alter_table.new_column = *$6;
+        delete $6;
+      }
+      free($3);
+    }
+    | ALTER TABLE ID DROP COLUMN ID
+    {
+      $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
+      AlterTableSqlNode &alter_table = $$->alter_table;
+      alter_table.table_name         = $3;
+      alter_table.alter_type         = AlterType::DROP_COLUMN;
+      alter_table.column_name        = $6;
+      free($3);
+      free($6);
+    }
+    | ALTER TABLE ID CHANGE COLUMN ID ID
+    {
+      $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
+      AlterTableSqlNode &alter_table = $$->alter_table;
+      alter_table.table_name         = $3;
+      alter_table.alter_type         = AlterType::CHANGE_COLUMN;
+      alter_table.column_name        = $6;
+      alter_table.new_column_name    = $7;
+      free($3);
+      free($6);
+      free($7);
+    }
+    | ALTER TABLE ID RENAME TO ID
+    {
+      $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
+      AlterTableSqlNode &alter_table = $$->alter_table;
+      alter_table.table_name         = $3;
+      alter_table.alter_type         = AlterType::RENAME_TABLE;
+      alter_table.new_table_name     = $6;
+      free($3);
+      free($6);
+    }
+    ;
 
 show_tables_stmt:
     SHOW TABLES {

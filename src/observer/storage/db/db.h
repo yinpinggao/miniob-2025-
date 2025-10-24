@@ -31,6 +31,7 @@ class LogHandler;
 class BufferPoolManager;
 class TrxKit;
 class SelectStmt;
+class AlterTableStmt;
 
 /**
  * @brief 一个DB实例负责管理一批表
@@ -80,6 +81,8 @@ public:
       SelectStmt *select_stmt, StorageFormat storage_format);
 
   RC drop_table(const char *table_name);
+
+  RC alter_table(AlterTableStmt &stmt);
 
   /**
    * @brief 根据表名查找表

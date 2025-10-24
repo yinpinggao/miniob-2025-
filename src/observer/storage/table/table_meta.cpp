@@ -18,6 +18,8 @@ See the Mulan PSL v2 for more details. */
 #include "common/global_context.h"
 #include "storage/table/table_meta.h"
 #include "storage/trx/trx.h"
+
+#include <utility>
 #include "json/json.h"
 
 static const Json::StaticString FIELD_TABLE_ID("table_id");
@@ -121,6 +123,130 @@ RC TableMeta::add_index(const IndexMeta &index)
 {
   indexes_.push_back(index);
   return RC::SUCCESS;
+}
+
+RC TableMeta::append_field(const AttrInfoSqlNode &attr_info)
+{
+  if (field(attr_info.name.c_str()) != nullptr) {
+    return RC::SCHEMA_FIELD_EXIST;
+  }
+
+  FieldMeta field_meta;
+  const int field_id = static_cast<int>(fields_.size()) - sys_field_num();
+  const int offset   = record_size_;
+
+  RC rc = field_meta.init(attr_info.name.c_str(),
+      attr_info.type,
+      offset,
+      attr_info.length,
+      true,
+      field_id,
+      attr_info.nullable,
+      attr_info.mutable_);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  fields_.push_back(field_meta);
+  record_size_ += attr_info.length;
+  return RC::SUCCESS;
+}
+
+RC TableMeta::remove_field(const std::string &field_name)
+{
+  int sys_num = sys_field_num();
+  int index   = -1;
+  for (int i = sys_num; i < static_cast<int>(fields_.size()); ++i) {
+    if (field_name == fields_[i].name()) {
+      index = i;
+      break;
+    }
+  }
+
+  if (index < 0) {
+    return RC::SCHEMA_FIELD_NOT_EXIST;
+  }
+
+  const int removed_len = fields_[index].len();
+
+  std::vector<FieldMeta> new_fields;
+  new_fields.reserve(fields_.size() - 1);
+
+  for (int i = 0; i < sys_num; ++i) {
+    new_fields.push_back(fields_[i]);
+  }
+
+  int offset = 0;
+  if (sys_num > 0) {
+    const FieldMeta &last_sys = new_fields[sys_num - 1];
+    offset = last_sys.offset() + last_sys.len();
+  }
+
+  int field_id = 0;
+  for (int i = sys_num; i < static_cast<int>(fields_.size()); ++i) {
+    if (i == index) {
+      continue;
+    }
+    const FieldMeta &field = fields_[i];
+    FieldMeta         new_field;
+    RC rc = new_field.init(field.name(),
+        field.type(),
+        offset,
+        field.len(),
+        field.visible(),
+        field_id,
+        field.nullable(),
+        field.is_mutable());
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    new_fields.push_back(new_field);
+    offset += field.len();
+    field_id++;
+  }
+
+  fields_.swap(new_fields);
+  record_size_ -= removed_len;
+  return RC::SUCCESS;
+}
+
+RC TableMeta::rename_field(const std::string &old_name, const std::string &new_name)
+{
+  if (field(new_name.c_str()) != nullptr) {
+    return RC::SCHEMA_FIELD_EXIST;
+  }
+
+  int sys_num = sys_field_num();
+  for (int i = sys_num; i < static_cast<int>(fields_.size()); ++i) {
+    if (old_name == fields_[i].name()) {
+      FieldMeta renamed_field;
+      RC        rc = renamed_field.init(new_name.c_str(),
+          fields_[i].type(),
+          fields_[i].offset(),
+          fields_[i].len(),
+          fields_[i].visible(),
+          fields_[i].field_id(),
+          fields_[i].nullable(),
+          fields_[i].is_mutable());
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      fields_[i] = renamed_field;
+      return RC::SUCCESS;
+    }
+  }
+
+  return RC::SCHEMA_FIELD_NOT_EXIST;
+}
+
+void TableMeta::set_name(const std::string &new_name)
+{
+  name_ = new_name;
+}
+
+void TableMeta::set_indexes(std::vector<IndexMeta> indexes)
+{
+  indexes_ = std::move(indexes);
 }
 
 const char *TableMeta::name() const { return name_.c_str(); }

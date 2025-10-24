@@ -31,6 +31,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/clog/disk_log_handler.h"
 #include "storage/clog/integrated_log_replayer.h"
 #include "storage/table/view.h"
+#include "sql/stmt/alter_table_stmt.h"
 
 using namespace common;
 
@@ -219,6 +220,50 @@ RC Db::drop_table(const char *table_name)
   delete table;
   LOG_INFO("Drop table success. table name=%s", table_name);
   return RC::SUCCESS;
+}
+
+RC Db::alter_table(AlterTableStmt &stmt)
+{
+  auto *table = dynamic_cast<Table *>(stmt.table());
+  if (table == nullptr) {
+    return RC::UNSUPPORTED;
+  }
+
+  RC rc = RC::SUCCESS;
+
+  switch (stmt.action_type()) {
+    case AlterTableStmt::ActionType::ADD_COLUMN: {
+      rc = table->alter_add_column(stmt.new_column());
+    } break;
+
+    case AlterTableStmt::ActionType::DROP_COLUMN: {
+      rc = table->alter_drop_column(stmt.column_name());
+    } break;
+
+    case AlterTableStmt::ActionType::CHANGE_COLUMN: {
+      rc = table->alter_change_column(stmt.column_name(), stmt.new_column_name());
+    } break;
+
+    case AlterTableStmt::ActionType::RENAME_TABLE: {
+      const std::string &new_name = stmt.new_table_name();
+      if (opened_tables_.find(new_name) != opened_tables_.end()) {
+        rc = RC::SCHEMA_TABLE_EXIST;
+        break;
+      }
+
+      rc = table->alter_rename_table(new_name);
+      if (OB_SUCC(rc)) {
+        opened_tables_.erase(stmt.table_name());
+        opened_tables_[new_name] = table;
+      }
+    } break;
+
+    default: {
+      rc = RC::UNIMPLEMENTED;
+    } break;
+  }
+
+  return rc;
 }
 
 BaseTable *Db::find_table(const char *table_name) const

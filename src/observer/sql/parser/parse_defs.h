@@ -259,6 +259,24 @@ struct DropTableSqlNode
   std::string relation_name;  ///< 要删除的表名
 };
 
+enum class AlterType
+{
+  ADD_COLUMN,
+  DROP_COLUMN,
+  CHANGE_COLUMN,
+  RENAME_TABLE,
+};
+
+struct AlterTableSqlNode
+{
+  std::string   table_name;
+  AlterType     alter_type = AlterType::ADD_COLUMN;
+  AttrInfoSqlNode new_column;        ///< ADD COLUMN 使用
+  std::string   column_name;         ///< DROP/CHANGE 使用
+  std::string   new_column_name;     ///< CHANGE 使用
+  std::string   new_table_name;      ///< RENAME TABLE 使用
+};
+
 enum class IndexType
 {
   BPlusTreeIndex,
@@ -388,6 +406,7 @@ enum SqlCommandFlag
   SCF_DESC_TABLE,
   SCF_CREATE_VIEW,
   SCF_DROP_VIEW,
+  SCF_ALTER_TABLE,
   SCF_BEGIN,  ///< 事务开始语句，可以在这里扩展只读事务
   SCF_COMMIT,
   SCF_CLOG_SYNC,
@@ -414,6 +433,7 @@ public:
   UpdateSqlNode       update;
   CreateTableSqlNode  create_table;
   DropTableSqlNode    drop_table;
+  AlterTableSqlNode   alter_table;
   CreateIndexSqlNode  create_index;
   DropIndexSqlNode    drop_index;
   ShowIndexSqlNode    show_index;

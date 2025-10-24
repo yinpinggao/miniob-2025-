@@ -50,6 +50,11 @@ public:
       StorageFormat storage_format);
 
   RC add_index(const IndexMeta &index);
+  RC append_field(const AttrInfoSqlNode &attr_info);
+  RC remove_field(const std::string &field_name);
+  RC rename_field(const std::string &old_name, const std::string &new_name);
+  void set_name(const std::string &new_name);
+  void set_indexes(std::vector<IndexMeta> indexes);
 
 public:
   int32_t             table_id() const { return table_id_; }

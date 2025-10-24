@@ -14,6 +14,8 @@ See the Mulan PSL v2 for more details. */
 
 #pragma once
 
+#include <unordered_map>
+
 #include "storage/table/base_table.h"
 #include "common/types.h"
 #include "common/lang/span.h"
@@ -104,12 +106,27 @@ public:
 
   RC sync() override;
 
+  RC alter_add_column(const AttrInfoSqlNode &attr_info);
+  RC alter_drop_column(const std::string &column_name);
+  RC alter_change_column(const std::string &old_name, const std::string &new_name);
+  RC alter_rename_table(const std::string &new_name);
+
 private:
   RC insert_entry_of_indexes(const char *record, const RID &rid);
   RC delete_entry_of_indexes(const char *record, const RID &rid, bool error_on_not_exists);
 
 private:
   RC init_record_handler(const char *base_dir);
+  RC close_record_handler();
+  RC reload_record_handler();
+  RC persist_table_meta(const TableMeta &meta, const std::string &table_name);
+  RC rewrite_table_storage(TableMeta &new_meta, const std::unordered_map<std::string, std::string> &field_mapping,
+      const std::vector<IndexMeta> &new_index_metas);
+  RC copy_record_to_new_layout(const TableMeta &src_meta, const Record &src_record, char *dest_buffer,
+      const TableMeta &dest_meta, const std::unordered_map<std::string, std::string> &field_mapping);
+  RC rebuild_indexes(const std::vector<IndexMeta> &index_metas);
+  RC reload_existing_indexes(const std::vector<IndexMeta> &index_metas);
+  RC drop_all_indexes(bool remove_files);
 
 public:
   Index *find_index(const char *index_name) const;
