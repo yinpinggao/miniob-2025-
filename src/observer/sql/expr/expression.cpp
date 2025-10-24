@@ -754,7 +754,12 @@ unique_ptr<Aggregator> AggregateFunctionExpr::create_aggregator() const
 
 RC AggregateFunctionExpr::get_value(const Tuple &tuple, Value &value)
 {
-  return tuple.find_cell(TupleCellSpec(name()), value);
+  RC rc = tuple.find_cell(TupleCellSpec(name()), value);
+  if (rc == RC::NOTFOUND) {
+    value = Value(NullValue());
+    return RC::SUCCESS;
+  }
+  return rc;
 }
 
 RC AggregateFunctionExpr::type_from_string(const char *type_str, AggregateFunctionType &type)
