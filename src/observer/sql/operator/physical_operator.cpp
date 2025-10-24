@@ -30,6 +30,7 @@ std::string physical_operator_type_name(PhysicalOperatorType type)
     case PhysicalOperatorType::DELETE: return "DELETE";
     case PhysicalOperatorType::UPDATE: return "UPDATE";
     case PhysicalOperatorType::PROJECT: return "PROJECT";
+    case PhysicalOperatorType::UNION: return "UNION";
     case PhysicalOperatorType::STRING_LIST: return "STRING_LIST";
     case PhysicalOperatorType::HASH_GROUP_BY: return "HASH_GROUP_BY";
     case PhysicalOperatorType::SCALAR_GROUP_BY: return "SCALAR_GROUP_BY";

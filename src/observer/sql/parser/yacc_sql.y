@@ -155,6 +155,8 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
         FORMAT
         INNER
         JOIN
+        UNION
+        ALL
         VIEW
         WITH
         STRING_TO_VECTOR
@@ -203,6 +205,8 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
   VectorIndexConfig *                        vector_index_config;
   float                                      digits;
   std::vector<float> *                       digits_list;
+  SetOperatorSqlNode *                       set_operator_node;
+  std::vector<SetOperatorSqlNode> *          set_operator_list;
 }
 
 %token <number> NUMBER
@@ -249,6 +253,9 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
 %type <vector_index_config> vector_index_config
 %type <sql_node>            calc_stmt
 %type <sql_node>            select_stmt
+%type <sql_node>            select_core
+%type <set_operator_list>   select_union_list
+%type <set_operator_node>   select_union_item
 %type <sql_node>            insert_stmt
 %type <sql_node>            update_stmt
 %type <sql_node>            delete_stmt
@@ -843,6 +850,51 @@ set_clause:
     ;
 
 select_stmt:
+    select_core select_union_list
+    {
+      $$ = $1;
+      if ($2 != nullptr) {
+        $$->selection.set_operations.swap(*$2);
+        delete $2;
+      }
+    }
+    ;
+
+select_union_list:
+    /* empty */
+    {
+      $$ = nullptr;
+    }
+    | select_union_list select_union_item
+    {
+      if ($1 != nullptr) {
+        $$ = $1;
+      } else {
+        $$ = new std::vector<SetOperatorSqlNode>();
+      }
+      $$->emplace_back(std::move(*$2));
+      delete $2;
+    }
+    ;
+
+select_union_item:
+    UNION select_core
+    {
+      $$ = new SetOperatorSqlNode;
+      $$->union_all = false;
+      $$->select = std::make_unique<SelectSqlNode>(std::move($2->selection));
+      delete $2;
+    }
+    | UNION ALL select_core
+    {
+      $$ = new SetOperatorSqlNode;
+      $$->union_all = true;
+      $$->select = std::make_unique<SelectSqlNode>(std::move($3->selection));
+      delete $3;
+    }
+    ;
+
+select_core:
     SELECT expression_list FROM rel_list where group_by opt_having opt_order_by opt_limit
     {
       $$ = new ParsedSqlNode(SCF_SELECT);

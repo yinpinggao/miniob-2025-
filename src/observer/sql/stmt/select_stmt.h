@@ -39,6 +39,16 @@ public:
   StmtType type() const override { return StmtType::SELECT; }
   size_t   query_expressions_size() const { return query_expressions_.size(); }
 
+  struct SetOperator
+  {
+    bool                                  union_all = false;
+    std::unique_ptr<SelectStmt>           select;
+  };
+
+  bool has_set_operations() const { return !set_operators_.empty(); }
+  const std::vector<SetOperator> &set_operations() const { return set_operators_; }
+  std::vector<SetOperator>       &set_operations() { return set_operators_; }
+
 public:
   static RC create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt,
       const std::unordered_map<std::string, BaseTable *> &parent_table_map = {});
@@ -63,4 +73,5 @@ private:
   std::vector<OrderBySqlNode>              order_by_;
   FilterStmt                              *having_filter_stmt_ = nullptr;
   int                                      limit_;
+  std::vector<SetOperator>                 set_operators_;
 };

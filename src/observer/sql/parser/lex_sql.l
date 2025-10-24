@@ -132,6 +132,8 @@ STORAGE                                 RETURN_TOKEN(STORAGE);
 FORMAT                                  RETURN_TOKEN(FORMAT);
 INNER                                   RETURN_TOKEN(INNER);
 JOIN                                    RETURN_TOKEN(JOIN);
+UNION                                   RETURN_TOKEN(UNION);
+ALL                                     RETURN_TOKEN(ALL);
 VIEW                                    RETURN_TOKEN(VIEW);
 WITH                                    RETURN_TOKEN(WITH);
 STRING_TO_VECTOR                        RETURN_TOKEN(STRING_TO_VECTOR);

@@ -22,6 +22,13 @@ See the Mulan PSL v2 for more details. */
 #include "common/value.h"
 
 class Expression;
+struct SelectSqlNode;
+
+struct SetOperatorSqlNode
+{
+  bool                                  union_all = false;
+  std::unique_ptr<SelectSqlNode>        select;
+};
 
 /**
  * @defgroup SQLParser SQL Parser
@@ -128,6 +135,7 @@ struct SelectSqlNode
   std::vector<OrderBySqlNode>              order_by;           ///< attributes in order clause
   std::unique_ptr<Expression>              having_conditions;  ///< having
   std::unique_ptr<LimitSqlNode>            limit;
+  std::vector<SetOperatorSqlNode>          set_operations;     ///< set operations like UNION/UNION ALL
 };
 
 /**

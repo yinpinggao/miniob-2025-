@@ -25,6 +25,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/order_by_logical_operator.h"
 #include "sql/operator/predicate_logical_operator.h"
 #include "sql/operator/project_logical_operator.h"
+#include "sql/operator/union_logical_operator.h"
 #include "sql/operator/table_get_logical_operator.h"
 #include "sql/operator/group_by_logical_operator.h"
 #include "sql/operator/limit_logical_operator.h"
@@ -99,102 +100,33 @@ RC LogicalPlanGenerator::create_plan(CalcStmt *calc_stmt, std::unique_ptr<Logica
 
 RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
-  unique_ptr<LogicalOperator> *last_oper = nullptr;
-
-  unique_ptr<LogicalOperator> table_oper(nullptr);
-  last_oper = &table_oper;
-
-  const std::vector<BaseTable *> &tables = select_stmt->tables();
-  const std::vector<std::string> &alias  = select_stmt->tables_alias();
-  for (int i = 0; i < tables.size(); ++i) {
-    unique_ptr<LogicalOperator> table_get_oper(
-        new TableGetLogicalOperator(tables[i], alias[i], ReadWriteMode::READ_ONLY));
-    if (table_oper == nullptr) {
-      table_oper = std::move(table_get_oper);
-    } else {
-      JoinLogicalOperator *join_oper = new JoinLogicalOperator;
-      join_oper->add_child(std::move(table_oper));
-      join_oper->add_child(std::move(table_get_oper));
-      table_oper = unique_ptr<LogicalOperator>(join_oper);
-    }
-  }
-
-  unique_ptr<LogicalOperator> predicate_oper;
-
-  RC rc = create_plan(select_stmt->filter_stmt(), predicate_oper);
-  if (OB_FAIL(rc)) {
-    LOG_WARN("failed to create predicate logical plan. rc=%s", strrc(rc));
-    return rc;
-  }
-
-  if (predicate_oper) {
-    if (*last_oper) {
-      predicate_oper->add_child(std::move(*last_oper));
-    }
-
-    last_oper = &predicate_oper;
-  }
-
-  unique_ptr<LogicalOperator> group_by_oper;
-  rc = create_group_by_plan(select_stmt, group_by_oper);
-  if (OB_FAIL(rc)) {
-    LOG_WARN("failed to create group by logical plan. rc=%s", strrc(rc));
-    return rc;
-  }
-
-  if (group_by_oper) {
-    if (*last_oper) {
-      group_by_oper->add_child(std::move(*last_oper));
-    }
-
-    last_oper = &group_by_oper;
-  }
-
-  unique_ptr<LogicalOperator> having_predicate_oper;
-
-  rc = create_plan(select_stmt->having_filter_stmt(), having_predicate_oper);
-  if (OB_FAIL(rc)) {
-    LOG_WARN("failed to create predicate logical plan. rc=%s", strrc(rc));
-    return rc;
-  }
-
-  if (having_predicate_oper) {
-    if (*last_oper) {
-      having_predicate_oper->add_child(std::move(*last_oper));
-    }
-    last_oper = &having_predicate_oper;
-  }
-
-  if (!select_stmt->order_by().empty()) {
-    unique_ptr<LogicalOperator> orderby_oper;
-    rc = create_order_by_plan(select_stmt, orderby_oper);
-    if (rc != RC::SUCCESS) {
-      LOG_WARN("failed to create orderby logical plan. rc=%s", strrc(rc));
+  if (select_stmt->has_set_operations()) {
+    unique_ptr<LogicalOperator> accumulated_plan;
+    RC                          rc = create_single_select_plan(select_stmt, accumulated_plan);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to create logical plan for select branch. rc=%s", strrc(rc));
       return rc;
     }
-    if (orderby_oper) {
-      if (*last_oper) {
-        orderby_oper->add_child(std::move(*last_oper));
+
+    for (const auto &set_operation : select_stmt->set_operations()) {
+      unique_ptr<LogicalOperator> right_plan;
+      rc = create_plan(set_operation.select.get(), right_plan);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to create logical plan for union branch. rc=%s", strrc(rc));
+        return rc;
       }
-      *last_oper = std::move(orderby_oper);
+
+      auto union_oper = make_unique<UnionLogicalOperator>(set_operation.union_all);
+      union_oper->add_child(std::move(accumulated_plan));
+      union_oper->add_child(std::move(right_plan));
+      accumulated_plan = std::move(union_oper);
     }
+
+    logical_operator = std::move(accumulated_plan);
+    return RC::SUCCESS;
   }
 
-  if (select_stmt->limit() != -1) {
-    unique_ptr<LimitLogicalOperator> limit_oper = std::make_unique<LimitLogicalOperator>(select_stmt->limit());
-    if (*last_oper) {
-      limit_oper->add_child(std::move(*last_oper));
-    }
-    *last_oper = std::move(limit_oper);
-  }
-
-  auto project_oper = make_unique<ProjectLogicalOperator>(std::move(select_stmt->query_expressions()));
-  if (*last_oper) {
-    project_oper->add_child(std::move(*last_oper));
-  }
-
-  logical_operator = std::move(project_oper);
-  return RC::SUCCESS;
+  return create_single_select_plan(select_stmt, logical_operator);
 }
 
 RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<LogicalOperator> &logical_operator)
@@ -391,5 +323,104 @@ RC LogicalPlanGenerator::create_order_by_plan(SelectStmt *select_stmt, unique_pt
 
   unique_ptr<LogicalOperator> orderby_oper(new OrderByLogicalOperator(std::move(select_stmt->order_by())));
   logical_operator = std::move(orderby_oper);
+  return RC::SUCCESS;
+}
+RC LogicalPlanGenerator::create_single_select_plan(SelectStmt *select_stmt, unique_ptr<LogicalOperator> &logical_operator)
+{
+  unique_ptr<LogicalOperator> *last_oper = nullptr;
+
+  unique_ptr<LogicalOperator> table_oper(nullptr);
+  last_oper = &table_oper;
+
+  const std::vector<BaseTable *> &tables = select_stmt->tables();
+  const std::vector<std::string> &alias  = select_stmt->tables_alias();
+  for (int i = 0; i < tables.size(); ++i) {
+    unique_ptr<LogicalOperator> table_get_oper(
+        new TableGetLogicalOperator(tables[i], alias[i], ReadWriteMode::READ_ONLY));
+    if (table_oper == nullptr) {
+      table_oper = std::move(table_get_oper);
+    } else {
+      JoinLogicalOperator *join_oper = new JoinLogicalOperator;
+      join_oper->add_child(std::move(table_oper));
+      join_oper->add_child(std::move(table_get_oper));
+      table_oper = unique_ptr<LogicalOperator>(join_oper);
+    }
+  }
+
+  unique_ptr<LogicalOperator> predicate_oper;
+
+  RC rc = create_plan(select_stmt->filter_stmt(), predicate_oper);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to create predicate logical plan. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  if (predicate_oper) {
+    if (*last_oper) {
+      predicate_oper->add_child(std::move(*last_oper));
+    }
+
+    last_oper = &predicate_oper;
+  }
+
+  unique_ptr<LogicalOperator> group_by_oper;
+  rc = create_group_by_plan(select_stmt, group_by_oper);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to create group by logical plan. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  if (group_by_oper) {
+    if (*last_oper) {
+      group_by_oper->add_child(std::move(*last_oper));
+    }
+
+    last_oper = &group_by_oper;
+  }
+
+  unique_ptr<LogicalOperator> having_predicate_oper;
+
+  rc = create_plan(select_stmt->having_filter_stmt(), having_predicate_oper);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to create predicate logical plan. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  if (having_predicate_oper) {
+    if (*last_oper) {
+      having_predicate_oper->add_child(std::move(*last_oper));
+    }
+    last_oper = &having_predicate_oper;
+  }
+
+  if (!select_stmt->order_by().empty()) {
+    unique_ptr<LogicalOperator> orderby_oper;
+    rc = create_order_by_plan(select_stmt, orderby_oper);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to create orderby logical plan. rc=%s", strrc(rc));
+      return rc;
+    }
+    if (orderby_oper) {
+      if (*last_oper) {
+        orderby_oper->add_child(std::move(*last_oper));
+      }
+      *last_oper = std::move(orderby_oper);
+    }
+  }
+
+  if (select_stmt->limit() != -1) {
+    unique_ptr<LimitLogicalOperator> limit_oper = std::make_unique<LimitLogicalOperator>(select_stmt->limit());
+    if (*last_oper) {
+      limit_oper->add_child(std::move(*last_oper));
+    }
+    *last_oper = std::move(limit_oper);
+  }
+
+  auto project_oper = make_unique<ProjectLogicalOperator>(std::move(select_stmt->query_expressions()));
+  if (*last_oper) {
+    project_oper->add_child(std::move(*last_oper));
+  }
+
+  logical_operator = std::move(project_oper);
   return RC::SUCCESS;
 }

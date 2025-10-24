@@ -154,6 +154,43 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt,
   select_stmt->order_by_.swap(order_by_);
   select_stmt->limit_              = limit;
   select_stmt->having_filter_stmt_ = having_filter_stmt;
+
+  if (!select_sql.set_operations.empty()) {
+    select_stmt->set_operations().reserve(select_sql.set_operations.size());
+  }
+
+  for (auto &set_sql_node : select_sql.set_operations) {
+    Stmt *child_stmt = nullptr;
+    RC    child_rc   = SelectStmt::create(db, *set_sql_node.select, child_stmt, parent_table_map);
+    if (OB_FAIL(child_rc)) {
+      LOG_WARN("failed to create select stmt for set operation. rc=%s", strrc(child_rc));
+      delete select_stmt;
+      return child_rc;
+    }
+
+    auto *child_select = dynamic_cast<SelectStmt *>(child_stmt);
+    if (child_select == nullptr) {
+      LOG_WARN("set operation child is not a select stmt");
+      delete child_stmt;
+      delete select_stmt;
+      return RC::INVALID_ARGUMENT;
+    }
+
+    if (child_select->query_expressions_size() != select_stmt->query_expressions_size()) {
+      LOG_WARN("union requires identical column count. base=%zu, branch=%zu",
+          select_stmt->query_expressions_size(),
+          child_select->query_expressions_size());
+      delete child_select;
+      delete select_stmt;
+      return RC::SCHEMA_FIELD_MISSING;
+    }
+
+    SelectStmt::SetOperator set_operator;
+    set_operator.union_all = set_sql_node.union_all;
+    set_operator.select.reset(child_select);
+    select_stmt->set_operations().emplace_back(std::move(set_operator));
+  }
+
   stmt                             = select_stmt;
   return RC::SUCCESS;
 }

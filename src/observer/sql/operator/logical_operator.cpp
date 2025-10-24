@@ -22,7 +22,8 @@ bool LogicalOperator::can_generate_vectorized_operator(const LogicalOperatorType
   bool bool_ret = false;
   switch (type) {
     case LogicalOperatorType::DELETE:
-    case LogicalOperatorType::INSERT: bool_ret = false; break;
+    case LogicalOperatorType::INSERT:
+    case LogicalOperatorType::UNION: bool_ret = false; break;
 
     default: bool_ret = true; break;
   }
