@@ -790,18 +790,6 @@ RC Table::alter_drop_column(const std::string &column_name)
     }
   }
 
-  // 检查是否有索引依赖该字段
-  for (int i = 0; i < table_meta_.index_num(); ++i) {
-    const IndexMeta *index_meta = table_meta_.index(i);
-    for (const FieldMeta &field_meta : index_meta->fields()) {
-      if (field_meta.name() == column_name) {
-        LOG_ERROR("Cannot drop column %s because it is used in index %s", 
-                 column_name.c_str(), index_meta->name());  // 去掉 .c_str()
-        return RC::SCHEMA_INDEX_EXIST;
-      }
-    }
-  }
-
 
   TableMeta new_meta(table_meta_);
   RC        rc = new_meta.remove_field(column_name);
