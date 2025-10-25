@@ -232,6 +232,9 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
 %type <comp>                comp_op
 %type <rel_attr>            rel_attr
 %type <nullable_info>       nullable_constraint
+%type <nullable_info>       change_column_type
+%type <nullable_info>       change_column_type_body
+%type <nullable_info>       change_column_nullable
 %type <attr_infos>          attr_def_list
 %type <attr_info>           attr_def
 %type <value_list>          value_list
@@ -393,7 +396,7 @@ alter_table_stmt:
       free($3);
       free($6);
     }
-    | ALTER TABLE ID CHANGE COLUMN ID ID
+    | ALTER TABLE ID CHANGE COLUMN ID ID change_column_type
     {
       $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
       AlterTableSqlNode &alter_table = $$->alter_table;
@@ -401,6 +404,7 @@ alter_table_stmt:
       alter_table.alter_type         = AlterType::CHANGE_COLUMN;
       alter_table.column_name        = $6;
       alter_table.new_column_name    = $7;
+      (void)$8;
       free($3);
       free($6);
       free($7);
@@ -414,6 +418,45 @@ alter_table_stmt:
       alter_table.new_table_name     = $6;
       free($3);
       free($6);
+    }
+    ;
+
+change_column_type:
+      type change_column_type_body
+    {
+      (void)$1;
+      $$ = $2;
+    }
+    | /* empty */
+    {
+      $$ = true;
+    }
+    ;
+
+change_column_type_body:
+      LBRACE NUMBER RBRACE change_column_nullable
+    {
+      (void)$2;
+      $$ = $4;
+    }
+    | change_column_nullable
+    {
+      $$ = $1;
+    }
+    | /* empty */
+    {
+      $$ = true;
+    }
+    ;
+
+change_column_nullable:
+      nullable_constraint
+    {
+      $$ = $1;
+    }
+    | /* empty */
+    {
+      $$ = true;
     }
     ;
 

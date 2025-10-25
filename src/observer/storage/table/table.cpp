@@ -861,33 +861,43 @@ RC Table::alter_change_column(const std::string &old_name, const std::string &ne
     }
   }
 
-TableMeta new_meta(table_meta_);
-  RC rc = new_meta.rename_field(old_name, new_name);
+  TableMeta new_meta(table_meta_);
+  RC        rc = new_meta.rename_field(old_name, new_name);
   if (OB_FAIL(rc)) {
     return rc;
   }
 
-  std::unordered_map<std::string, std::string> rename_map;
-  rename_map[old_name] = new_name;
+  std::unordered_map<std::string, std::string> index_name_map;
+  index_name_map[old_name] = new_name;
 
   std::vector<IndexMeta> new_indexes;
   new_indexes.reserve(table_meta_.index_num());
 
   for (int i = 0; i < table_meta_.index_num(); ++i) {
     const IndexMeta *old_index = table_meta_.index(i);
-    IndexMeta rebuilt_index;
-    
-    // 使用新的辅助方法
-    rc = build_index_meta_with_mapping(new_meta, *old_index, rebuilt_index, rename_map);
+    IndexMeta        rebuilt_index;
+    rc               = build_index_meta_with_mapping(new_meta, *old_index, rebuilt_index, index_name_map);
     if (OB_FAIL(rc)) {
       return rc;
     }
     new_indexes.push_back(std::move(rebuilt_index));
   }
 
-  // 使用 rewrite_table_storage 来确保数据一致性
-  rc = rewrite_table_storage(new_meta, rename_map, new_indexes);
-  return rc;
+  new_meta.set_indexes(new_indexes);
+  table_meta_.swap(new_meta);
+  table_meta_.set_indexes(new_indexes);
+
+  rc = persist_table_meta(table_meta_, table_meta_.name());
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = reload_existing_indexes(new_indexes);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  return RC::SUCCESS;
 }
 
 RC Table::alter_rename_table(const std::string &new_name)
