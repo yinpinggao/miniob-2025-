@@ -125,6 +125,17 @@ RC TableMeta::add_index(const IndexMeta &index)
   return RC::SUCCESS;
 }
 
+RC TableMeta::remove_index(const std::string &index_name)
+{
+  for (auto iter = indexes_.begin(); iter != indexes_.end(); ++iter) {
+    if (0 == strcmp(iter->name(), index_name.c_str())) {
+      indexes_.erase(iter);
+      return RC::SUCCESS;
+    }
+  }
+  return RC::SCHEMA_INDEX_NOT_EXIST;
+}
+
 RC TableMeta::append_field(const AttrInfoSqlNode &attr_info)
 {
   if (field(attr_info.name.c_str()) != nullptr) {

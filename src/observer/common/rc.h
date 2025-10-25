@@ -52,6 +52,7 @@ See the Mulan PSL v2 for more details. */
   DEFINE_RC(SCHEMA_TABLE_EXIST)              \
   DEFINE_RC(SCHEMA_FIELD_EXIST)              \
   DEFINE_RC(SCHEMA_INDEX_EXIST)              \
+  DEFINE_RC(SCHEMA_INDEX_NOT_EXIST)          \
   DEFINE_RC(SCHEMA_FIELD_NOT_EXIST)          \
   DEFINE_RC(SCHEMA_FIELD_MISSING)            \
   DEFINE_RC(SCHEMA_FIELD_TYPE_MISMATCH)      \

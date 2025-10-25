@@ -110,6 +110,7 @@ public:
   RC alter_drop_column(const std::string &column_name);
   RC alter_change_column(const std::string &old_name, const std::string &new_name);
   RC alter_rename_table(const std::string &new_name);
+  RC drop_index(const char *index_name);
 
 private:
   RC insert_entry_of_indexes(const char *record, const RID &rid);

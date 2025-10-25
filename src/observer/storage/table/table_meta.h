@@ -50,6 +50,7 @@ public:
       StorageFormat storage_format);
 
   RC add_index(const IndexMeta &index);
+  RC remove_index(const std::string &index_name);
   RC append_field(const AttrInfoSqlNode &attr_info);
   RC remove_field(const std::string &field_name);
   RC rename_field(const std::string &old_name, const std::string &new_name);

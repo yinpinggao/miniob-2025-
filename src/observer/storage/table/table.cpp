@@ -1211,6 +1211,65 @@ RC Table::create_vector_index(Trx *trx, IndexType index_type, const vector<Field
   return rc;
 }
 
+RC Table::drop_index(const char *index_name)
+{
+  if (common::is_blank(index_name)) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  Index *index = find_index(index_name);
+  if (index == nullptr) {
+    return RC::SCHEMA_INDEX_NOT_EXIST;
+  }
+
+  TableMeta new_table_meta(table_meta_);
+  RC        rc = new_table_meta.remove_index(index_name);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  string  tmp_file = table_meta_file(base_dir_.c_str(), name()) + ".tmp";
+  fstream fs;
+  fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
+  if (!fs.is_open()) {
+    LOG_ERROR("Failed to open file for write when dropping index. file name=%s, errmsg=%s",
+        tmp_file.c_str(), strerror(errno));
+    return RC::IOERR_OPEN;
+  }
+
+  if (new_table_meta.serialize(fs) < 0) {
+    LOG_ERROR("Failed to dump new table meta to file: %s. sys err=%d:%s", tmp_file.c_str(), errno, strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+  fs.close();
+
+  string meta_file = table_meta_file(base_dir_.c_str(), name());
+  if (rename(tmp_file.c_str(), meta_file.c_str()) != 0) {
+    LOG_ERROR("Failed to rename tmp meta file (%s) to normal meta file (%s) while dropping index (%s) on table (%s)."
+              " system error=%d:%s",
+        tmp_file.c_str(), meta_file.c_str(), index_name, name(), errno, strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+
+  table_meta_.swap(new_table_meta);
+
+  index->close();
+  auto iter = std::find(indexes_.begin(), indexes_.end(), index);
+  if (iter != indexes_.end()) {
+    delete *iter;
+    indexes_.erase(iter);
+  }
+
+  string          index_file = table_index_file(base_dir_.c_str(), name(), index_name);
+  std::error_code ec;
+  if (!fs::remove(index_file, ec) && ec) {
+    LOG_WARN("failed to remove index file %s: %s", index_file.c_str(), ec.message().c_str());
+  }
+
+  LOG_INFO("Dropped index %s on table %s", index_name, name());
+  return RC::SUCCESS;
+}
+
 RC Table::delete_record(const RID &rid)
 {
   RC     rc = RC::SUCCESS;
