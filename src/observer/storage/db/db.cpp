@@ -246,7 +246,7 @@ RC Db::alter_table(AlterTableStmt &stmt)
 
     case AlterTableStmt::ActionType::RENAME_TABLE: {
       const std::string &new_name = stmt.new_table_name();
-      if (opened_tables_.find(new_name) != opened_tables_.end()) {
+      if (new_name != stmt.table_name() && opened_tables_.find(new_name) != opened_tables_.end()) {
         rc = RC::SCHEMA_TABLE_EXIST;
         break;
       }
