@@ -10,6 +10,7 @@
  *                                                             *
  ***************************************************************/
 
+#include <sstream>
 #include "storage/db/db.h"
 #include "storage/trx/trx.h"
 #include "storage/table/view.h"
@@ -43,24 +44,17 @@ RC View::create(Db *db, int32_t table_id, const char *path, const char *name, co
     AttrInfoSqlNode attr_info;
     if (query_expr->type() == ExprType::FIELD) {
       auto field_expr = dynamic_cast<FieldExpr *>(query_expr.get());
+      auto *base_table =
+          field_expr != nullptr ? const_cast<BaseTable *>(field_expr->field().table()) : nullptr;
+      const FieldMeta *field_meta = field_expr != nullptr ? field_expr->field().meta() : nullptr;
 
-      // 建立视图字段到基表字段的索引
-      bool find = false;
-      for (auto &table : tables_) {
-        auto table_field_meta = table->table_meta().field(field_expr->name());
-        // 当前视图字段在这个表
-        if (table_field_meta != nullptr) {
-          field_index_[i] = {table, table_field_meta->field_id()};
-          find            = true;
-          break;
-        }
-      }
-      if (!find) {
-        LOG_ERROR("View field '%s' not found in any base tables", field_expr->name());
+      if (base_table == nullptr || field_meta == nullptr) {
+        LOG_ERROR("Failed to resolve field expression while creating view");
         return RC::SCHEMA_FIELD_MISSING;
       }
 
-      auto field_meta    = field_expr->field().meta();
+      field_index_[i] = {base_table, field_meta->field_id()};
+
       attr_info.type     = field_meta->type();
       attr_info.name     = attr_names.empty() ? (field_expr->has_alias() ? field_expr->alias() : field_meta->name())
                                               : std::move(attr_names[i]);
@@ -154,33 +148,41 @@ RC View::insert_record(Record &record)
 {
   RC rc = RC::SUCCESS;
 
-  for (auto &table : tables_) {
-    auto               value_num = table->table_meta().field_num();
-    std::vector<Value> values(value_num);
+  const auto &view_fields       = *table_meta_.field_metas();
+  const int   view_sys_fields   = table_meta_.sys_field_num();
+  const int   logical_field_num = static_cast<int>(view_fields.size()) - view_sys_fields;
 
-    // 不涉及的字段默认为 null
+  for (auto &table : tables_) {
+    const int base_sys_fields = table->table_meta().sys_field_num();
+    const int value_num       = table->table_meta().field_num() - base_sys_fields;
+    if (value_num <= 0) {
+      continue;
+    }
+
+    std::vector<Value> values(value_num);
     for (auto &value : values) {
       value.set_null();
     }
 
-    auto field_metas = *table_meta_.field_metas();
-    // 遍历视图的字段找到基表的字段
-    for (int i = 0; i < field_metas.size(); ++i) {
-      // 基表字段所在索引
-      auto [base_table, idx] = field_index_[i];
-      // 是一个表则写入 value
-      if (strcmp(base_table->name(), table->name()) == 0) {
-        // 插入值
-        Value value;
-        rc = record.get_field(field_metas[i], value);
-        if (OB_FAIL(rc)) {
-          return rc;
-        }
-        values[idx] = std::move(value);
+    for (int i = 0; i < logical_field_num; ++i) {
+      auto &[base_table, field_id] = field_index_[i];
+      if (base_table == nullptr || base_table != table) {
+        continue;
       }
+
+      Value value;
+      rc = record.get_field(view_fields[i + view_sys_fields], value);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+
+      if (field_id < 0 || field_id >= value_num) {
+        LOG_ERROR("Invalid field mapping while inserting into view %s", name());
+        return RC::INTERNAL;
+      }
+      values[field_id] = std::move(value);
     }
 
-    // 生成真正的 record 并插入基表
     Record real_record;
     rc = table->make_record(value_num, values.data(), real_record);
     if (OB_FAIL(rc)) {
@@ -197,7 +199,6 @@ RC View::insert_record(Record &record)
 
   return RC::SUCCESS;
 }
-
 RC View::delete_record(const Record &record)
 {
   RC rc = RC::SUCCESS;
@@ -274,9 +275,15 @@ RC View::drop()
 
   auto       table_name = name();
   error_code ec;
-  auto       path = table_meta_file(base_dir_.c_str(), table_name);
+  auto       path = vtable_meta_file(base_dir_.c_str(), table_name);
   if (!filesystem::remove(path, ec)) {
     LOG_ERROR("Drop table meta fail: %s. error=%s", path.c_str(), strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+
+  path = table_data_file(base_dir_.c_str(), table_name);
+  if (!filesystem::remove(path, ec)) {
+    LOG_ERROR("Drop view data fail: %s. error=%s", path.c_str(), strerror(errno));
     return RC::IOERR_WRITE;
   }
 
