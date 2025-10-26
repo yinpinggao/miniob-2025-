@@ -14,7 +14,7 @@ See the Mulan PSL v2 for more details. */
 
 #include <limits.h>
 #include <string.h>
-
+#include <cstdio>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -1199,6 +1199,7 @@ RC Table::create_vector_index(Trx *trx, IndexType index_type, const vector<Field
   return rc;
 }
 
+
 RC Table::drop_index(const char *index_name)
 {
   if (common::is_blank(index_name)) {
@@ -1294,23 +1295,33 @@ RC Table::update_record(const Record &old_record, const Record &new_record)
            name(), index->index_meta().name(), old_record.rid().to_string().c_str(), strrc(rc));
   }
 
-  // 尝试插入
   rc = insert_entry_of_indexes(new_record.data(), new_record.rid());
-  // 出现重复键
-  if (rc != RC::SUCCESS) {
-    // 因为有些索引还没有插入，删除失败不应该报错
-    RC delete_entry_of_indexes_rc = delete_entry_of_indexes(new_record.data(), new_record.rid(), false);
-    if (RC::SUCCESS != delete_entry_of_indexes_rc) {
-      LOG_WARN("failed to rollback index data when insert index entries failed. table name=%s, rc=%s", name(), strrc(delete_entry_of_indexes_rc));
-      return delete_entry_of_indexes_rc;
+  if (OB_FAIL(rc)) {
+    RC recover_rc = insert_entry_of_indexes(old_record.data(), old_record.rid());
+    if (OB_FAIL(recover_rc)) {
+      LOG_PANIC("failed to restore index data when insert new index entries failed. table=%s rc=%s", name(), strrc(recover_rc));
+      return recover_rc;
     }
     return rc;
   }
 
-  // 最后更新记录
   rc = record_handler_->update_record(new_record.data(), &new_record.rid());
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to update record data while updating table=%s rc=%s", name(), strrc(rc));
+    RC delete_rc = delete_entry_of_indexes(new_record.data(), new_record.rid(), false);
+    if (OB_FAIL(delete_rc)) {
+      LOG_PANIC("failed to rollback new index entries when record update failed. table=%s rc=%s", name(), strrc(delete_rc));
+      return delete_rc;
+    }
+    RC recover_rc = insert_entry_of_indexes(old_record.data(), old_record.rid());
+    if (OB_FAIL(recover_rc)) {
+      LOG_PANIC("failed to restore old index entries after record update failure. table=%s rc=%s", name(), strrc(recover_rc));
+      return recover_rc;
+    }
+  }
   return rc;
 }
+
 
 RC Table::insert_entry_of_indexes(const char *record, const RID &rid)
 {

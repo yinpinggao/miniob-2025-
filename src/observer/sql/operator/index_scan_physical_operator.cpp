@@ -15,15 +15,21 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/index_scan_physical_operator.h"
 #include "storage/index/index.h"
 #include "storage/trx/trx.h"
+#include <algorithm>
 
 IndexScanPhysicalOperator::IndexScanPhysicalOperator(Table *table, Index *index, ReadWriteMode mode,
     const Value *left_value, bool left_inclusive, const Value *right_value, bool right_inclusive)
     : table_(table), index_(index), mode_(mode), left_inclusive_(left_inclusive), right_inclusive_(right_inclusive)
 {
   if (left_value) {
+      //new
+    has_left_value_ = true;
     left_value_ = *left_value;
+  
   }
   if (right_value) {
+    //new
+     has_right_value_ = true;
     right_value_ = *right_value;
   }
 }
@@ -34,12 +40,62 @@ IndexScanPhysicalOperator::IndexScanPhysicalOperator(Table *table, std::string t
 {
   tuple_.set_table_alias(table_alias);
   if (left_value) {
+    //new
+     has_left_value_ = true;
     left_value_ = *left_value;
   }
   if (right_value) {
+    //new
+    has_right_value_ = true;
     right_value_ = *right_value;
   }
 }
+//new
+RC IndexScanPhysicalOperator::build_search_key(const Value &value, std::string &buffer)
+{
+  if (index_ == nullptr || table_ == nullptr) {
+    return RC::INTERNAL;
+  }
+
+  const auto &fields = index_->index_meta().fields();
+  if (fields.size() != 1) {
+    LOG_WARN("index scan currently supports single column indexes only. index=%s", index_->index_meta().name());
+    return RC::UNSUPPORTED;
+  }
+
+  const FieldMeta &field = fields[0];
+  std::string      record_storage(table_->table_meta().record_size(), 0);
+  Value            typed_value = value;
+
+  if (!typed_value.is_null() && typed_value.attr_type() != field.type()) {
+    RC rc = Value::cast_to(value, field.type(), typed_value, false);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to cast boundary value to field type. field=%s rc=%s", field.name(), strrc(rc));
+      return rc;
+    }
+  }
+
+  if (typed_value.is_null()) {
+    if (!field.nullable()) {
+      LOG_WARN("field %s is not nullable but got null boundary", field.name());
+      return RC::NOT_NULLABLE_VALUE;
+    }
+    record_storage[field.offset() + field.len() - 1] = '1';
+  } else {
+    RC rc = table_->set_value_to_record(record_storage.data(), typed_value, &field);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to set value to record buffer. field=%s rc=%s", field.name(), strrc(rc));
+      return rc;
+    }
+    if (field.nullable()) {
+      record_storage[field.offset() + field.len() - 1] = 0;
+    }
+  }
+
+  buffer.assign(record_storage.data() + field.offset(), record_storage.data() + field.offset() + field.len());
+  return RC::SUCCESS;
+}
+
 
 RC IndexScanPhysicalOperator::open(Trx *trx)
 {
@@ -47,12 +103,38 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
     return RC::INTERNAL;
   }
 
-  IndexScanner *index_scanner = index_->create_scanner(left_value_.data(),
-      left_value_.length(),
-      left_inclusive_,
-      right_value_.data(),
-      right_value_.length(),
-      right_inclusive_);
+  const char *left_key  = nullptr;
+  int         left_len  = 0;
+  const char *right_key = nullptr;
+  int         right_len = 0;
+  RC          rc        = RC::SUCCESS;
+
+  if (has_left_value_) {
+    rc = build_search_key(left_value_, left_search_key_);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to build left search key. rc=%s", strrc(rc));
+      return rc;
+    }
+    left_key = left_search_key_.data();
+    left_len = static_cast<int>(left_search_key_.size());
+  } else {
+    left_search_key_.clear();
+  }
+
+  if (has_right_value_) {
+    rc = build_search_key(right_value_, right_search_key_);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to build right search key. rc=%s", strrc(rc));
+      return rc;
+    }
+    right_key = right_search_key_.data();
+    right_len = static_cast<int>(right_search_key_.size());
+  } else {
+    right_search_key_.clear();
+  }
+
+  IndexScanner *index_scanner = index_->create_scanner(
+      left_key, left_len, left_inclusive_, right_key, right_len, right_inclusive_);
   if (nullptr == index_scanner) {
     LOG_WARN("failed to create index scanner");
     return RC::INTERNAL;
