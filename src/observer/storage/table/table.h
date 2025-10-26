@@ -84,6 +84,8 @@ public:
   RC create_vector_index(Trx *trx, IndexType index_type, const vector<FieldMeta> &field_meta, const char *index_name,
       NormalFunctionType distance_type, const std::vector<int> &options);
 
+  RC drop_index(const char *index_name);
+
   RC get_record_scanner(RecordFileScanner &scanner, Trx *trx, ReadWriteMode mode);
 
   RC get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode mode);

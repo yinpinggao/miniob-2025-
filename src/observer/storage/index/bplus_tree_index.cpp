@@ -134,7 +134,8 @@ RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 
 RC BplusTreeIndex::delete_entry(const char *record, const RID *rid)
 {
-  char *entry = index_meta_.make_entry_from_record(record);
+  std::unique_ptr<char[]> entry_guard(index_meta_.make_entry_from_record(record));
+  char                   *entry = entry_guard.get();
   return index_handler_.delete_entry(entry, rid);
 }
 

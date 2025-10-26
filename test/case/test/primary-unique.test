@@ -21,3 +21,17 @@ INSERT INTO unique_table2 VALUES (2,1,1,1);
 -- echo 2. select
 -- sort SELECT * FROM unique_table;
 -- sort SELECT * FROM unique_table2;
+
+-- echo 3. drop index and restore
+DROP INDEX index_id ON unique_table;
+INSERT INTO unique_table VALUES (1,2,1);
+CREATE UNIQUE INDEX index_id ON unique_table(id);
+
+-- echo 4. update with unique index
+CREATE TABLE t2(x int, y char(10));
+INSERT INTO t2 VALUES(1,'aaaa');
+INSERT INTO t2 VALUES (4,'Linn');
+INSERT INTO t2 VALUES(3,'cccc');
+CREATE UNIQUE INDEX index_t2 ON t2(y);
+UPDATE t2 SET y='cccc' WHERE y='aaaa';
+SELECT * FROM t2;

@@ -14,6 +14,7 @@ See the Mulan PSL v2 for more details. */
 
 #include <limits.h>
 #include <string.h>
+#include <cstdio>
 
 #include <utility>
 
@@ -434,6 +435,153 @@ RC Table::create_index(
   return rc;
 }
 
+RC Table::drop_index(const char *index_name)
+{
+  if (common::is_blank(index_name)) {
+    LOG_WARN("Invalid input arguments while dropping index. table=%s", name());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  int   index_pos    = -1;
+  Index *target_index = nullptr;
+  for (size_t i = 0; i < indexes_.size(); i++) {
+    if (0 == strcmp(indexes_[i]->index_meta().name(), index_name)) {
+      index_pos    = static_cast<int>(i);
+      target_index = indexes_[i];
+      break;
+    }
+  }
+
+  if (target_index == nullptr) {
+    LOG_WARN("index %s not found on table %s", index_name, name());
+    return RC::SCHEMA_INDEX_NOT_EXIST;
+  }
+
+  const IndexMeta *index_meta = table_meta_.index(index_name);
+  if (index_meta == nullptr) {
+    LOG_WARN("missing index meta while dropping index. table=%s index=%s", name(), index_name);
+    return RC::SCHEMA_INDEX_NOT_EXIST;
+  }
+
+  TableMeta new_table_meta(table_meta_);
+  RC        rc = new_table_meta.remove_index(index_name);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to remove index meta. table=%s index=%s rc=%s", name(), index_name, strrc(rc));
+    return rc;
+  }
+
+  auto dump_meta_to_tmp = [&](const TableMeta &meta, const std::string &tmp_file) -> RC {
+    fstream fs;
+    fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
+    if (!fs.is_open()) {
+      LOG_ERROR("Failed to open file for write. file name=%s, errmsg=%s", tmp_file.c_str(), strerror(errno));
+      return RC::IOERR_OPEN;
+    }
+    if (meta.serialize(fs) < 0) {
+      LOG_ERROR("Failed to dump table meta to file: %s. sys err=%d:%s", tmp_file.c_str(), errno, strerror(errno));
+      return RC::IOERR_WRITE;
+    }
+    fs.close();
+    return RC::SUCCESS;
+  };
+
+  auto close_index = [&](Index *index) -> RC {
+    if (index->is_vector_index()) {
+      auto *vector_index = dynamic_cast<IvfflatIndex *>(index);
+      return vector_index->close();
+    }
+    auto *btree_index = dynamic_cast<BplusTreeIndex *>(index);
+    return btree_index->close();
+  };
+
+  auto reopen_index = [&](Index *index) -> RC {
+    string index_file_path = table_index_file(base_dir_.c_str(), name(), index_name);
+    if (index->is_vector_index()) {
+      auto *vector_index = dynamic_cast<IvfflatIndex *>(index);
+      ASSERT(!index_meta->fields().empty(), "vector index meta has no fields");
+      return vector_index->open(this, index_file_path.c_str(), *index_meta, index_meta->fields()[0]);
+    }
+    auto *btree_index = dynamic_cast<BplusTreeIndex *>(index);
+    return btree_index->open(this, index_file_path.c_str(), *index_meta);
+  };
+
+  string tmp_meta_file = table_meta_file(base_dir_.c_str(), name()) + ".tmp";
+  rc                  = dump_meta_to_tmp(new_table_meta, tmp_meta_file);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  rc = close_index(target_index);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("Failed to close index %s while dropping. table=%s rc=%s", index_name, name(), strrc(rc));
+    ::remove(tmp_meta_file.c_str());
+    return rc;
+  }
+
+  string index_file  = table_index_file(base_dir_.c_str(), name(), index_name);
+  string backup_file = index_file + ".bak";
+  if (0 != ::remove(backup_file.c_str()) && errno != ENOENT) {
+    LOG_ERROR("Failed to remove stale backup index file: %s. err=%s", backup_file.c_str(), strerror(errno));
+    reopen_index(target_index);
+    ::remove(tmp_meta_file.c_str());
+    return RC::FILE_REMOVE;
+  }
+
+  if (0 != ::rename(index_file.c_str(), backup_file.c_str())) {
+    LOG_ERROR("Failed to rename index file to backup. file=%s err=%s", index_file.c_str(), strerror(errno));
+    reopen_index(target_index);
+    ::remove(tmp_meta_file.c_str());
+    return RC::IOERR_WRITE;
+  }
+
+  string meta_file = table_meta_file(base_dir_.c_str(), name());
+  if (0 != ::rename(tmp_meta_file.c_str(), meta_file.c_str())) {
+    LOG_ERROR("Failed to update meta file while dropping index %s on table %s. err=%s", index_name, name(), strerror(errno));
+    if (0 != ::rename(backup_file.c_str(), index_file.c_str())) {
+      LOG_PANIC("Failed to restore index file during drop rollback. file=%s err=%s", index_file.c_str(), strerror(errno));
+    }
+    ::remove(tmp_meta_file.c_str());
+    RC reopen_rc = reopen_index(target_index);
+    if (OB_FAIL(reopen_rc)) {
+      LOG_PANIC("Failed to reopen index after drop rollback. table=%s idx=%s rc=%s", name(), index_name, strrc(reopen_rc));
+    }
+    return RC::IOERR_WRITE;
+  }
+
+  table_meta_.swap(new_table_meta);
+
+  if (0 != ::remove(backup_file.c_str())) {
+    LOG_ERROR("Failed to delete index file %s after dropping index %s. err=%s", backup_file.c_str(), index_name, strerror(errno));
+
+    RC revert_rc = dump_meta_to_tmp(new_table_meta, tmp_meta_file);
+    if (OB_FAIL(revert_rc)) {
+      LOG_PANIC("Failed to dump original meta while rolling back drop index. table=%s rc=%s", name(), strrc(revert_rc));
+      ::remove(tmp_meta_file.c_str());
+    } else {
+      if (0 != ::rename(tmp_meta_file.c_str(), meta_file.c_str())) {
+        LOG_PANIC("Failed to restore table meta file while rolling back drop index. table=%s err=%s", name(), strerror(errno));
+      } else {
+        table_meta_.swap(new_table_meta);
+      }
+    }
+
+    if (0 != ::rename(backup_file.c_str(), index_file.c_str())) {
+      LOG_PANIC("Failed to restore index file from backup. file=%s err=%s", index_file.c_str(), strerror(errno));
+    }
+    RC reopen_rc = reopen_index(target_index);
+    if (OB_FAIL(reopen_rc)) {
+      LOG_PANIC("Failed to reopen index after rollback. table=%s idx=%s rc=%s", name(), index_name, strrc(reopen_rc));
+    }
+    return RC::FILE_REMOVE;
+  }
+
+  indexes_.erase(indexes_.begin() + index_pos);
+  delete target_index;
+
+  LOG_INFO("Successfully dropped index (%s) on the table (%s)", index_name, name());
+  return RC::SUCCESS;
+}
+
 RC Table::create_vector_index(Trx *trx, IndexType index_type, const vector<FieldMeta> &field_meta,
     const char *index_name, NormalFunctionType distance_type, const std::vector<int> &options)
 {
@@ -577,21 +725,30 @@ RC Table::update_record(const Record &old_record, const Record &new_record)
            name(), index->index_meta().name(), old_record.rid().to_string().c_str(), strrc(rc));
   }
 
-  // 尝试插入
   rc = insert_entry_of_indexes(new_record.data(), new_record.rid());
-  // 出现重复键
-  if (rc != RC::SUCCESS) {
-    // 因为有些索引还没有插入，删除失败不应该报错
-    RC delete_entry_of_indexes_rc = delete_entry_of_indexes(new_record.data(), new_record.rid(), false);
-    if (RC::SUCCESS != delete_entry_of_indexes_rc) {
-      LOG_WARN("failed to rollback index data when insert index entries failed. table name=%s, rc=%s", name(), strrc(delete_entry_of_indexes_rc));
-      return delete_entry_of_indexes_rc;
+  if (OB_FAIL(rc)) {
+    RC recover_rc = insert_entry_of_indexes(old_record.data(), old_record.rid());
+    if (OB_FAIL(recover_rc)) {
+      LOG_PANIC("failed to restore index data when insert new index entries failed. table=%s rc=%s", name(), strrc(recover_rc));
+      return recover_rc;
     }
     return rc;
   }
 
-  // 最后更新记录
   rc = record_handler_->update_record(new_record.data(), &new_record.rid());
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to update record data while updating table=%s rc=%s", name(), strrc(rc));
+    RC delete_rc = delete_entry_of_indexes(new_record.data(), new_record.rid(), false);
+    if (OB_FAIL(delete_rc)) {
+      LOG_PANIC("failed to rollback new index entries when record update failed. table=%s rc=%s", name(), strrc(delete_rc));
+      return delete_rc;
+    }
+    RC recover_rc = insert_entry_of_indexes(old_record.data(), old_record.rid());
+    if (OB_FAIL(recover_rc)) {
+      LOG_PANIC("failed to restore old index entries after record update failure. table=%s rc=%s", name(), strrc(recover_rc));
+      return recover_rc;
+    }
+  }
   return rc;
 }
 

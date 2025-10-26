@@ -50,6 +50,7 @@ public:
       StorageFormat storage_format);
 
   RC add_index(const IndexMeta &index);
+  RC remove_index(const char *index_name);
 
 public:
   int32_t             table_id() const { return table_id_; }
