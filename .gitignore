@@ -33,3 +33,6 @@ test_sql
 node_modules
 package.json
 package-lock.json
+observer.log*
+*.log
+logs/
