@@ -183,6 +183,9 @@ RC View::insert_record(Record &record)
       value.set_null();
     }
 
+    // 记录是否有任何非 NULL 值插入到当前表
+    bool has_value = false;
+    
     for (int i = 0; i < logical_field_num; ++i) {
       auto &[base_table, field_id] = field_index_[i];
       if (base_table == nullptr || base_table != table) {
@@ -199,7 +202,17 @@ RC View::insert_record(Record &record)
         LOG_ERROR("Invalid field mapping while inserting into view %s", name());
         return RC::INTERNAL;
       }
+      
+      // 如果有非 NULL 值，标记该表需要插入
+      if (!value.is_null()) {
+        has_value = true;
+      }
       values[field_id] = std::move(value);
+    }
+
+    // 只有当该表至少有一个非 NULL 值时才插入
+    if (!has_value) {
+      continue;
     }
 
     Record real_record;
@@ -409,9 +422,10 @@ RC View::init_member()
       auto field_expr = dynamic_cast<FieldExpr *>(query_expr.get());
 
       // 建立视图字段到基表字段的索引
+      // 注意：使用 field_name() 而不是 name()，因为 name() 可能返回别名
       bool find = false;
       for (auto &table : tables_) {
-        auto table_field_meta = table->table_meta().field(field_expr->name());
+        auto table_field_meta = table->table_meta().field(field_expr->field_name());
         // 当前视图字段在这个表
         if (table_field_meta != nullptr) {
           field_index_[i] = {table, table_field_meta->field_id()};
@@ -420,7 +434,7 @@ RC View::init_member()
         }
       }
       if (!find) {
-        LOG_ERROR("View field '%s' not found in any base tables", field_expr->name());
+        LOG_ERROR("View field '%s' not found in any base tables", field_expr->field_name());
         return RC::SCHEMA_FIELD_MISSING;
       }
     } else {

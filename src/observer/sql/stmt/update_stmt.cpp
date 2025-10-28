@@ -75,6 +75,7 @@ RC UpdateStmt::create(Db *db, UpdateSqlNode &update_sql, Stmt *&stmt)
       // 获取字段索引映射
       auto &field_index = view->field_index();
       auto field_metas_ptr = table_meta.field_metas();
+      const int sys_field_num = table_meta.sys_field_num();
       
       // 检查所有更新的字段是否来自同一个基表
       for (auto &clause : update_sql.set_clauses) {
@@ -93,8 +94,15 @@ RC UpdateStmt::create(Db *db, UpdateSqlNode &update_sql, Stmt *&stmt)
           return RC::SCHEMA_FIELD_NOT_EXIST;
         }
         
+        // field_index 只包含逻辑字段，需要减去系统字段的偏移
+        int logical_field_idx = view_field_idx - sys_field_num;
+        if (logical_field_idx < 0 || logical_field_idx >= static_cast<int>(field_index.size())) {
+          LOG_ERROR("System field '%s' cannot be updated", clause.field_name.c_str());
+          return RC::INVALID_ARGUMENT;
+        }
+        
         // 通过 field_index 获取字段对应的基表
-        auto &[base_table, field_id] = field_index[view_field_idx];
+        auto &[base_table, field_id] = field_index[logical_field_idx];
         
         if (base_table == nullptr) {
           LOG_ERROR("Field '%s' is an expression field, cannot be updated", clause.field_name.c_str());

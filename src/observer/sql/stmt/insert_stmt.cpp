@@ -73,6 +73,8 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
       
       // 检查指定的字段是否都来自同一个基表
       BaseTable *target_table = nullptr;
+      const int sys_field_num = table_meta.sys_field_num();
+      
       for (const auto &attr_name : inserts.attr_names) {
         // 查找字段在视图中的索引
         int view_field_idx = -1;
@@ -89,8 +91,15 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
           return RC::SCHEMA_FIELD_NOT_EXIST;
         }
         
+        // field_index 只包含逻辑字段，需要减去系统字段的偏移
+        int logical_field_idx = view_field_idx - sys_field_num;
+        if (logical_field_idx < 0 || logical_field_idx >= static_cast<int>(field_index.size())) {
+          LOG_ERROR("System field '%s' cannot be inserted", attr_name.c_str());
+          return RC::INVALID_ARGUMENT;
+        }
+        
         // 通过 field_index 获取字段对应的基表
-        auto &[base_table, field_id] = field_index[view_field_idx];
+        auto &[base_table, field_id] = field_index[logical_field_idx];
         
         if (base_table == nullptr) {
           LOG_ERROR("Field '%s' is an expression field, cannot be used in insert", attr_name.c_str());
