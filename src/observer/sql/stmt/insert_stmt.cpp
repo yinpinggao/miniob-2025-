@@ -116,9 +116,12 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
         }
       }
     } else {
-      // 单表视图：如果没有指定字段列表，检查所有字段是否都可变（不包含表达式字段）
+      // 单表视图：如果没有指定字段列表，检查所有逻辑字段是否都可变（不包含表达式字段）
       if (inserts.attr_names.empty()) {
-        for (auto &field_meta : *field_metas) {
+        const int sys_field_num = table_meta.sys_field_num();
+        // 只检查逻辑字段（跳过系统字段）
+        for (size_t i = sys_field_num; i < field_metas->size(); ++i) {
+          auto &field_meta = (*field_metas)[i];
           if (!field_meta.is_mutable()) {
             LOG_ERROR("Column '%s' is not insertable", field_meta.name());
             return RC::EXPRESSION_FIELD_NOT_INSERTABLE;
