@@ -353,6 +353,13 @@ RC View::open(Db *db, const char *meta_file, const char *base_dir)
     return rc;
   }
 
+  // 初始化视图成员（tables_ 和 field_index_）
+  rc = init_member();
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("Failed to initialize view members for %s", name());
+    return rc;
+  }
+
   return RC::SUCCESS;
 }
 
