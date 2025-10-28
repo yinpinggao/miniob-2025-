@@ -47,6 +47,12 @@ public:
   RC init_data();
 
   RC init_member();
+  
+  /**
+   * 确保视图已经初始化
+   * 如果尚未初始化，会自动调用 init_data 和 init_member
+   */
+  RC ensure_initialized();
 
   RC insert_record(Record &record) override;
   RC delete_record(const Record &record) override;
@@ -60,6 +66,10 @@ public:
   const std::string &select_sql() { return select_sql_; }
 
   bool has_join() { return tables_.size() > 1; }
+  
+  const std::vector<BaseTable *> &tables() const { return tables_; }
+  
+  const std::vector<std::pair<BaseTable *, int>> &field_index() const { return field_index_; }
 
 private:
   std::string select_sql_;  // 持久化，运行时也只能存解析后的 sql，因为涉及独占资源的移动

@@ -51,7 +51,7 @@ RC DeleteStmt::create(Db *db, DeleteSqlNode &delete_sql, Stmt *&stmt)
     }
     auto view = dynamic_cast<View *>(table);
     if (view->has_join()) {
-      LOG_ERROR("Can not delete from join view '%s.%s' without fields list", db->name(), table->name());
+      LOG_ERROR("Can not delete from join view '%s.%s'", db->name(), table->name());
       return RC::JOIN_VIEW_DELETE_ERROR;
     }
   }

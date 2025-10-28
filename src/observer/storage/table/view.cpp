@@ -39,7 +39,7 @@ RC View::create(Db *db, int32_t table_id, const char *path, const char *name, co
   auto                        &query_exprs = select_stmt->query_expressions();
   std::vector<AttrInfoSqlNode> attr_infos(query_exprs.size());
   field_index_.resize(query_exprs.size());
-  for (int i = 0; i < select_stmt->query_expressions_size(); ++i) {
+  for (size_t i = 0; i < select_stmt->query_expressions_size(); ++i) {
     auto           &query_expr = query_exprs[i];
     AttrInfoSqlNode attr_info;
     if (query_expr->type() == ExprType::FIELD) {
@@ -144,6 +144,25 @@ RC View::create(Db *db, int32_t table_id, const char *path, const char *name, co
   return rc;
 }
 
+RC View::ensure_initialized()
+{
+  // 如果已经初始化过，直接返回
+  if (!tables_.empty()) {
+    return RC::SUCCESS;
+  }
+  
+  // 如果 select_sql 为空，先加载数据
+  if (select_sql_.empty()) {
+    RC rc = init_data();
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+  }
+  
+  // 初始化成员变量
+  return init_member();
+}
+
 RC View::insert_record(Record &record)
 {
   RC rc = RC::SUCCESS;
@@ -229,7 +248,7 @@ RC View::update_record(const Record &old_record, const Record &new_record)
     // 将视图的修改记录映射到基表的记录
     Record base_new_record = base_old_record;
     auto  &field_metas     = *table_meta_.field_metas();
-    for (int i = 0; i < field_metas.size(); ++i) {
+    for (size_t i = 0; i < field_metas.size(); ++i) {
       auto &field_meta = field_metas[i];
       if (field_meta.is_mutable()) {
         auto &[base_table, idx] = field_index_[i];
@@ -250,7 +269,10 @@ RC View::update_record(const Record &old_record, const Record &new_record)
       }
     }
 
-    table->update_record(base_old_record, base_new_record);
+    rc = table->update_record(base_old_record, base_new_record);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
   }
 
   return rc;
@@ -381,7 +403,7 @@ RC View::init_member()
 
   auto &query_exprs = select_stmt->query_expressions();
   field_index_.resize(query_exprs.size());
-  for (int i = 0; i < query_exprs.size(); ++i) {
+  for (size_t i = 0; i < query_exprs.size(); ++i) {
     auto &query_expr = query_exprs[i];
     if (query_expr->type() == ExprType::FIELD) {
       auto field_expr = dynamic_cast<FieldExpr *>(query_expr.get());

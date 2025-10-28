@@ -60,6 +60,59 @@ RC UpdateStmt::create(Db *db, UpdateSqlNode &update_sql, Stmt *&stmt)
   std::vector<std::unique_ptr<Expression>> values;
 
   RC rc = RC::SUCCESS;
+  
+  // 对于 join 视图，检查所有更新的字段是否来自同一个基表
+  BaseTable *target_base_table = nullptr;
+  if (table->type() == TableType::View) {
+    auto view = dynamic_cast<View *>(table);
+    if (view->has_join()) {
+      // 确保视图已初始化
+      rc = view->ensure_initialized();
+      if (rc != RC::SUCCESS) {
+        return rc;
+      }
+      
+      // 获取字段索引映射
+      auto &field_index = view->field_index();
+      auto field_metas_ptr = table_meta.field_metas();
+      
+      // 检查所有更新的字段是否来自同一个基表
+      for (auto &clause : update_sql.set_clauses) {
+        // 查找字段在视图中的索引
+        int view_field_idx = -1;
+        for (size_t i = 0; i < field_metas_ptr->size(); ++i) {
+          if (strcmp((*field_metas_ptr)[i].name(), clause.field_name.c_str()) == 0) {
+            view_field_idx = i;
+            break;
+          }
+        }
+        
+        if (view_field_idx < 0) {
+          LOG_WARN("Field does not exist. db=%s, table_name=%s, field_name=%s",
+                    db->name(), table_name, clause.field_name.c_str());
+          return RC::SCHEMA_FIELD_NOT_EXIST;
+        }
+        
+        // 通过 field_index 获取字段对应的基表
+        auto &[base_table, field_id] = field_index[view_field_idx];
+        
+        if (base_table == nullptr) {
+          LOG_ERROR("Field '%s' is an expression field, cannot be updated", clause.field_name.c_str());
+          return RC::EXPRESSION_FIELD_NOT_UPDATEABLE;
+        }
+        
+        // 检查是否所有字段都来自同一个基表
+        if (target_base_table == nullptr) {
+          target_base_table = base_table;
+        } else if (target_base_table != base_table) {
+          LOG_ERROR("Can not update join view '%s.%s' with fields from multiple tables", 
+                     db->name(), table->name());
+          return RC::JOIN_VIEW_INSERT_ERROR;  // 重用这个错误码，或者创建新的
+        }
+      }
+    }
+  }
+  
   for (auto &clause : update_sql.set_clauses) {
     // check whether the field exists
     auto field_meta = table_meta.field(clause.field_name.c_str());

@@ -14,6 +14,7 @@ See the Mulan PSL v2 for more details. */
 
 #pragma once
 
+#include <cstdint>
 #include "common/rc.h"
 #include "sql/stmt/stmt.h"
 
@@ -28,7 +29,8 @@ class InsertStmt : public Stmt
 {
 public:
   InsertStmt() = delete;
-  InsertStmt(BaseTable *table, std::vector<std::vector<Value>> values_list);
+  InsertStmt(BaseTable *table, std::vector<std::vector<Value>> values_list,
+      std::vector<std::vector<uint8_t>> column_masks);
 
   StmtType type() const override { return StmtType::INSERT; }
 
@@ -36,8 +38,10 @@ public:
 
   BaseTable                             *table() const { return table_; }
   const std::vector<std::vector<Value>> &values_list() const { return values_list_; };
+  const std::vector<std::vector<uint8_t>> &column_masks() const { return column_masks_; };
 
 private:
   BaseTable                      *table_ = nullptr;
   std::vector<std::vector<Value>> values_list_;
+  std::vector<std::vector<uint8_t>> column_masks_;
 };
