@@ -116,25 +116,15 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
         }
       }
     } else {
-      // 单表视图：如果没有指定字段列表，检查所有逻辑字段是否都可变（不包含表达式字段）
-      if (inserts.attr_names.empty()) {
-        const int sys_field_num = table_meta.sys_field_num();
-        // 只检查逻辑字段（跳过系统字段）
-        for (size_t i = sys_field_num; i < field_metas->size(); ++i) {
-          auto &field_meta = (*field_metas)[i];
-          if (!field_meta.is_mutable()) {
-            LOG_ERROR("Column '%s' is not insertable", field_meta.name());
-            return RC::EXPRESSION_FIELD_NOT_INSERTABLE;
-          }
-        }
-      } else {
-        // 如果指定了字段列表，只检查指定字段的可变性
-        for (const auto &attr_name : inserts.attr_names) {
-          auto field_meta = table_meta.field(attr_name.c_str());
-          if (field_meta != nullptr && !field_meta->is_mutable()) {
-            LOG_ERROR("Column '%s' is not insertable", field_meta->name());
-            return RC::EXPRESSION_FIELD_NOT_INSERTABLE;
-          }
+      // 单表视图：检查视图是否包含表达式字段
+      // 如果视图包含任何表达式字段（不可变字段），则完全禁止插入
+      const int sys_field_num = table_meta.sys_field_num();
+      for (size_t i = sys_field_num; i < field_metas->size(); ++i) {
+        auto &field_meta = (*field_metas)[i];
+        if (!field_meta.is_mutable()) {
+          LOG_ERROR("The target table %s of the INSERT is not insertable-into because it contains expression field '%s'", 
+                    table->name(), field_meta.name());
+          return RC::EXPRESSION_FIELD_NOT_INSERTABLE;
         }
       }
     }
