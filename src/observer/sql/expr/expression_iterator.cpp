@@ -70,6 +70,13 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, const function<RC(un
       }
     } break;
 
+    case ExprType::SUBQUERY:
+    case ExprType::EXISTS:
+    case ExprType::EXPRLIST: {
+      // 子查询和表达式列表暂时不需要迭代子表达式
+      // 它们会在各自的执行阶段处理
+    } break;
+
     case ExprType::NONE:
     case ExprType::STAR:
     case ExprType::UNBOUND_FIELD:
@@ -166,6 +173,9 @@ RC ExpressionIterator::condition_iterate_expr(std::unique_ptr<Expression> &expr)
       }
     } break;
 
+    case ExprType::SUBQUERY:
+    case ExprType::EXISTS:
+    case ExprType::EXPRLIST:
     case ExprType::ARITHMETIC:
     case ExprType::AGGREGATION:
     case ExprType::NORMAL_FUNCTION:
@@ -219,6 +229,9 @@ RC ExpressionIterator::having_condition_iterate_expr(
       bound_expressions.push_back(expr.get());
     } break;
 
+    case ExprType::SUBQUERY:
+    case ExprType::EXISTS:
+    case ExprType::EXPRLIST:
     case ExprType::CAST:
     case ExprType::ARITHMETIC:
     case ExprType::NORMAL_FUNCTION:

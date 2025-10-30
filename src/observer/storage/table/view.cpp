@@ -56,8 +56,15 @@ RC View::create(Db *db, int32_t table_id, const char *path, const char *name, co
       field_index_[i] = {base_table, field_meta->field_id()};
 
       attr_info.type     = field_meta->type();
-      // 别名已经被设置到 name 属性中了，直接使用
-      attr_info.name     = attr_names.empty() ? query_expr->name() : std::move(attr_names[i]);
+      // 如果没有指定列名，优先使用别名，否则使用字段本身的名字（不带表前缀）
+      if (!attr_names.empty()) {
+        attr_info.name = std::move(attr_names[i]);
+      } else if (query_expr->has_alias()) {
+        attr_info.name = query_expr->alias();
+      } else {
+        // 使用字段本身的名字，而不是带表前缀的完整名字
+        attr_info.name = field_meta->name();
+      }
       attr_info.length   = field_meta->len();
       attr_info.nullable = field_meta->nullable();
       attr_info.mutable_ = field_meta->is_mutable();
