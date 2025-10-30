@@ -17,6 +17,8 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 
 #include <utility>
+#include <functional>
+#include <algorithm>
 
 OrderByPhysicalOperator::OrderByPhysicalOperator(vector<OrderBySqlNode> order_by) : order_by_(std::move(order_by))
 {
@@ -207,25 +209,44 @@ size_t OrderByPhysicalOperator::estimate_input_rows() const
       // 索引扫描：通常返回较少行
       return 500;   // 默认500行
       
+    case PhysicalOperatorType::GRACE_HASH_JOIN:
+      // Grace Hash Join：说明是大数据集多表JOIN
+      // 这是外部算法，专门处理大数据集
+      return 100000;  // 10万行
+      
     case PhysicalOperatorType::NESTED_LOOP_JOIN: {
-      // JOIN：检查JOIN的深度来估算
-      // 通过递归检查子算子判断是否是多表JOIN
-      int join_depth = 0;
-      PhysicalOperator *left_child = children_[0]->children().size() > 0 ? children_[0]->children()[0].get() : nullptr;
-      if (left_child && left_child->type() == PhysicalOperatorType::NESTED_LOOP_JOIN) {
-        join_depth++;
-        PhysicalOperator *left_left = left_child->children().size() > 0 ? left_child->children()[0].get() : nullptr;
-        if (left_left && left_left->type() == PhysicalOperatorType::NESTED_LOOP_JOIN) {
-          join_depth++;
+      // Nested Loop JOIN：递归计算JOIN深度
+      std::function<int(PhysicalOperator*)> calc_join_depth = [&](PhysicalOperator* op) -> int {
+        if (op == nullptr) {
+          return 0;
         }
-      }
+        PhysicalOperatorType op_type = op->type();
+        if (op_type != PhysicalOperatorType::NESTED_LOOP_JOIN && 
+            op_type != PhysicalOperatorType::GRACE_HASH_JOIN) {
+          return 0;  // 非JOIN节点深度为0
+        }
+        // JOIN节点：深度 = 1 + max(左子树深度, 右子树深度)
+        int left_depth = 0;
+        int right_depth = 0;
+        auto& child_ops = op->children();
+        if (child_ops.size() >= 1) {
+          left_depth = calc_join_depth(child_ops[0].get());
+        }
+        if (child_ops.size() >= 2) {
+          right_depth = calc_join_depth(child_ops[1].get());
+        }
+        return 1 + std::max(left_depth, right_depth);
+      };
+      
+      // 计算JOIN深度（包括自己）
+      int join_depth = calc_join_depth(children_[0].get());
       
       // 根据JOIN深度估算
-      if (join_depth >= 2) {
-        // 深度JOIN（3+表），可能是big_order_by场景
+      if (join_depth >= 3) {
+        // 深度JOIN（4+表），可能是big_order_by场景
         return 100000;  // 10万行
       } else {
-        // 简单JOIN（1-2表）
+        // 简单JOIN（1-3表）
         return 1000;    // 1000行
       }
     }

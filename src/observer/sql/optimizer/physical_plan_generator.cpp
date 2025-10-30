@@ -13,6 +13,8 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include <utility>
+#include <functional>
+#include <algorithm>
 
 #include "common/log/log.h"
 #include "sql/expr/expression.h"
@@ -403,22 +405,33 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
   unique_ptr<PhysicalOperator> join_physical_oper;
   
   // 估算JOIN的深度（多少层嵌套JOIN）
-  // 通过递归检查子算子来判断是否是多表JOIN
-  int join_depth = 0;
-  LogicalOperator *left_child = child_opers[0].get();
-  LogicalOperator *right_child = child_opers[1].get();
+  // 递归计算JOIN树的最大深度
+  std::function<int(LogicalOperator*)> calc_join_depth = [&](LogicalOperator* op) -> int {
+    if (op == nullptr) {
+      return 0;
+    }
+    if (op->type() != LogicalOperatorType::JOIN) {
+      return 0;  // 非JOIN节点深度为0
+    }
+    // JOIN节点：深度 = 1 + max(左子树深度, 右子树深度)
+    int left_depth = 0;
+    int right_depth = 0;
+    auto& children = op->children();
+    if (children.size() >= 1) {
+      left_depth = calc_join_depth(children[0].get());
+    }
+    if (children.size() >= 2) {
+      right_depth = calc_join_depth(children[1].get());
+    }
+    return 1 + std::max(left_depth, right_depth);
+  };
   
-  // 简单启发式：如果两边都有JOIN，说明是多表JOIN
-  if (left_child->type() == LogicalOperatorType::JOIN) {
-    join_depth++;
-  }
-  if (right_child->type() == LogicalOperatorType::JOIN) {
-    join_depth++;
-  }
+  // 计算当前JOIN的深度（包括自己）
+  int join_depth = calc_join_depth(&join_oper);
   
-  // 只有在检测到深度JOIN（至少2层，即3表以上）时才考虑使用外部JOIN
-  // 这种情况下数据量可能很大（如20*20*20=8000行以上）
-  const bool is_multi_table_join = (join_depth >= 2);
+  // 只有在检测到深度JOIN（至少3层，即4表）时才考虑使用外部JOIN
+  // big_order_by场景：4表JOIN的深度为3
+  const bool is_multi_table_join = (join_depth >= 3);
   
   if (is_multi_table_join) {
     // 多表JOIN：使用Grace Hash Join处理大数据集

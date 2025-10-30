@@ -43,6 +43,19 @@ public:
   static RC deserialize(std::istream &is, Tuple *&tuple);
 
   /**
+   * @brief 从输入流反序列化Tuple（带specs缓存）
+   * @details 用于RunReader，避免重复读取和创建TupleCellSpec
+   * @param is 输入流
+   * @param tuple 输出的tuple（调用者负责释放）
+   * @param cached_specs 缓存的TupleCellSpec（首次调用时为空，会被填充）
+   * @param specs_cached 标记specs是否已缓存
+   * @return RC 操作结果
+   */
+  static RC deserialize_with_cached_specs(std::istream &is, Tuple *&tuple,
+                                          std::vector<TupleCellSpec> &cached_specs,
+                                          bool &specs_cached);
+
+  /**
    * @brief 估算Tuple序列化后的大小
    * @param tuple 要估算的tuple
    * @return size_t 估算的字节数

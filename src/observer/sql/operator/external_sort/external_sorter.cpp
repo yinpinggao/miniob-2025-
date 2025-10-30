@@ -297,24 +297,29 @@ Tuple *ExternalSorter::flatten_tuple(const Tuple *tuple) const
     values.push_back(value);
   }
 
-  // 提取所有cell的spec
-  std::vector<TupleCellSpec> specs;
-  specs.reserve(cell_num);
-  for (int i = 0; i < cell_num; i++) {
-    TupleCellSpec spec;
-    RC            rc = tuple->spec_at(i, spec);
-    if (rc != RC::SUCCESS) {
-      // 如果没有spec，使用默认的
-      specs.push_back(TupleCellSpec("", "", nullptr));
-    } else {
-      specs.push_back(spec);
+  // 优化：缓存 TupleCellSpec，避免重复复制
+  // 所有tuple的schema是相同的，只需要提取一次
+  if (!specs_cached_) {
+    cached_specs_.clear();
+    cached_specs_.reserve(cell_num);
+    for (int i = 0; i < cell_num; i++) {
+      TupleCellSpec spec;
+      RC            rc = tuple->spec_at(i, spec);
+      if (rc != RC::SUCCESS) {
+        // 如果没有spec，使用默认的
+        cached_specs_.push_back(TupleCellSpec("", "", nullptr));
+      } else {
+        cached_specs_.push_back(spec);
+      }
     }
+    specs_cached_ = true;
+    LOG_DEBUG("cached %lu TupleCellSpecs for schema", cached_specs_.size());
   }
 
-  // 创建ValueListTuple
+  // 创建ValueListTuple，使用缓存的specs
   ValueListTuple *value_list_tuple = new ValueListTuple();
   value_list_tuple->set_cells(values);
-  value_list_tuple->set_names(specs);
+  value_list_tuple->set_names(cached_specs_);  // 使用缓存的specs
 
   return value_list_tuple;
 }
@@ -348,6 +353,9 @@ RC ExternalSorter::RunReader::next(Tuple *&tuple)
     return RC::RECORD_EOF;
   }
 
+  // 使用普通的反序列化方法
+  // 注意：虽然这会重复创建TupleCellSpec，但文件格式中每个tuple都包含完整specs
+  // 未来优化：可以修改文件格式，在文件头写入schema，每个tuple只写values
   RC rc = TupleSerializer::deserialize(file_, current_tuple_);
   if (rc != RC::SUCCESS) {
     if (file_.eof()) {
@@ -372,5 +380,9 @@ void ExternalSorter::RunReader::close()
     current_tuple_ = nullptr;
   }
   has_next_ = false;
+  
+  // 清理缓存的specs
+  cached_specs_.clear();
+  specs_cached_ = false;
 }
 

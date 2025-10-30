@@ -114,5 +114,12 @@ private:
   JoinedTuple    joined_tuple_;            // 当前join结果
   size_t         build_index_;             // build side遍历索引
   bool           partition_join_done_;     // 当前分区join是否完成
+  
+  // 缓存 TupleCellSpec，避免重复复制（所有tuple的schema相同）
+  // 左表和右表分别缓存
+  mutable std::vector<TupleCellSpec> cached_left_specs_;
+  mutable bool left_specs_cached_ = false;
+  mutable std::vector<TupleCellSpec> cached_right_specs_;
+  mutable bool right_specs_cached_ = false;
 };
 

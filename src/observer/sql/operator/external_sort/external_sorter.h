@@ -82,6 +82,10 @@ private:
     std::ifstream file_;
     Tuple        *current_tuple_;
     bool          has_next_;
+    
+    // 缓存TupleCellSpec，避免重复读取（同一run文件中所有tuple的schema相同）
+    std::vector<TupleCellSpec> cached_specs_;
+    bool specs_cached_ = false;
   };
 
   /**
@@ -137,5 +141,9 @@ private:
   using HeapCompare = std::function<bool(const HeapNode &, const HeapNode &)>;
   std::priority_queue<HeapNode, std::vector<HeapNode>, HeapCompare> *merge_heap_;  // 归并堆
   bool sorted_;  // 是否已排序
+  
+  // 缓存 TupleCellSpec，避免重复复制（所有tuple的schema相同）
+  mutable std::vector<TupleCellSpec> cached_specs_;
+  mutable bool specs_cached_ = false;
 };
 

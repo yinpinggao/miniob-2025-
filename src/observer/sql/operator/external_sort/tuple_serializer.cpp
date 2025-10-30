@@ -92,11 +92,25 @@ RC TupleSerializer::serialize(std::ostream &os, const Tuple *tuple)
 
 RC TupleSerializer::deserialize(std::istream &is, Tuple *&tuple)
 {
+  // 先检查是否EOF
+  if (is.eof()) {
+    return RC::RECORD_EOF;
+  }
+  
   // 读取cell数量
   int cell_num = 0;
   is.read(reinterpret_cast<char *>(&cell_num), sizeof(cell_num));
-  if (!is.good() || cell_num < 0 || cell_num > 10000) {  // 合理性检查
-    LOG_WARN("failed to read cell_num or invalid cell_num: %d", cell_num);
+  if (!is.good()) {
+    // 可能是EOF或其他读取错误
+    if (is.eof()) {
+      return RC::RECORD_EOF;
+    }
+    LOG_WARN("failed to read cell_num from stream");
+    return RC::IOERR_READ;
+  }
+  
+  if (cell_num < 0 || cell_num > 10000) {  // 合理性检查
+    LOG_WARN("invalid cell_num: %d", cell_num);
     return RC::IOERR_READ;
   }
 
@@ -169,6 +183,130 @@ RC TupleSerializer::deserialize(std::istream &is, Tuple *&tuple)
   ValueListTuple *value_list_tuple = new ValueListTuple();
   value_list_tuple->set_cells(values);
   value_list_tuple->set_names(specs);
+
+  tuple = value_list_tuple;
+  return RC::SUCCESS;
+}
+
+RC TupleSerializer::deserialize_with_cached_specs(std::istream &is, Tuple *&tuple,
+                                                   std::vector<TupleCellSpec> &cached_specs,
+                                                   bool &specs_cached)
+{
+  // 读取cell数量
+  int cell_num = 0;
+  is.read(reinterpret_cast<char *>(&cell_num), sizeof(cell_num));
+  if (!is.good() || cell_num < 0 || cell_num > 10000) {
+    LOG_WARN("failed to read cell_num or invalid cell_num: %d", cell_num);
+    return RC::IOERR_READ;
+  }
+
+  // 如果specs未缓存，读取并缓存
+  if (!specs_cached) {
+    cached_specs.clear();
+    cached_specs.reserve(cell_num);
+    
+    for (int i = 0; i < cell_num; i++) {
+      // 读取table_name
+      int len = 0;
+      is.read(reinterpret_cast<char *>(&len), sizeof(len));
+      if (!is.good() || len < 0 || len > 1000) {
+        LOG_WARN("failed to read table_name length or invalid length: %d", len);
+        return RC::IOERR_READ;
+      }
+      std::string table_name;
+      if (len > 0) {
+        std::vector<char> buf(len + 1);
+        is.read(buf.data(), len);
+        buf[len]   = '\0';
+        table_name = std::string(buf.data(), len);
+      }
+
+      // 读取field_name
+      is.read(reinterpret_cast<char *>(&len), sizeof(len));
+      if (!is.good() || len < 0 || len > 1000) {
+        LOG_WARN("failed to read field_name length or invalid length: %d", len);
+        return RC::IOERR_READ;
+      }
+      std::string field_name;
+      if (len > 0) {
+        std::vector<char> buf(len + 1);
+        is.read(buf.data(), len);
+        buf[len]   = '\0';
+        field_name = std::string(buf.data(), len);
+      }
+
+      // 读取alias
+      is.read(reinterpret_cast<char *>(&len), sizeof(len));
+      if (!is.good() || len < 0 || len > 1000) {
+        LOG_WARN("failed to read alias length or invalid length: %d", len);
+        return RC::IOERR_READ;
+      }
+      std::string alias;
+      if (len > 0) {
+        std::vector<char> buf(len + 1);
+        is.read(buf.data(), len);
+        buf[len] = '\0';
+        alias    = std::string(buf.data(), len);
+      }
+
+      cached_specs.push_back(TupleCellSpec(table_name.c_str(), field_name.c_str(), alias.empty() ? nullptr : alias.c_str()));
+    }
+    
+    specs_cached = true;
+    LOG_DEBUG("cached %d TupleCellSpecs for RunReader", cell_num);
+  } else {
+    // specs已缓存，跳过读取specs部分
+    for (int i = 0; i < cell_num; i++) {
+      // 跳过table_name
+      int len = 0;
+      is.read(reinterpret_cast<char *>(&len), sizeof(len));
+      if (!is.good() || len < 0 || len > 1000) {
+        LOG_WARN("failed to skip table_name length");
+        return RC::IOERR_READ;
+      }
+      if (len > 0) {
+        is.seekg(len, std::ios::cur);  // 跳过
+      }
+
+      // 跳过field_name
+      is.read(reinterpret_cast<char *>(&len), sizeof(len));
+      if (!is.good() || len < 0 || len > 1000) {
+        LOG_WARN("failed to skip field_name length");
+        return RC::IOERR_READ;
+      }
+      if (len > 0) {
+        is.seekg(len, std::ios::cur);  // 跳过
+      }
+
+      // 跳过alias
+      is.read(reinterpret_cast<char *>(&len), sizeof(len));
+      if (!is.good() || len < 0 || len > 1000) {
+        LOG_WARN("failed to skip alias length");
+        return RC::IOERR_READ;
+      }
+      if (len > 0) {
+        is.seekg(len, std::ios::cur);  // 跳过
+      }
+    }
+  }
+
+  // 读取values（每次都要读取）
+  std::vector<Value> values;
+  values.reserve(cell_num);
+  for (int i = 0; i < cell_num; i++) {
+    Value value;
+    RC    rc = deserialize_value(is, value);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to deserialize value at %d", i);
+      return rc;
+    }
+    values.push_back(std::move(value));
+  }
+
+  // 创建ValueListTuple，使用缓存的specs
+  ValueListTuple *value_list_tuple = new ValueListTuple();
+  value_list_tuple->set_cells(values);
+  value_list_tuple->set_names(cached_specs);  // 使用缓存的specs
 
   tuple = value_list_tuple;
   return RC::SUCCESS;

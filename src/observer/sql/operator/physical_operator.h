@@ -43,6 +43,7 @@ enum class PhysicalOperatorType
   VIEW_SCAN,
   VECTOR_INDEX_SCAN,
   NESTED_LOOP_JOIN,
+  GRACE_HASH_JOIN,  // 外部Hash Join（用于大数据集）
   EXPLAIN,
   PREDICATE,
   PREDICATE_VEC,

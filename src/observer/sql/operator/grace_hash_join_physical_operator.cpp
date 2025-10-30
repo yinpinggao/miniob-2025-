@@ -104,6 +104,10 @@ RC GraceHashJoinPhysicalOperator::partition_phase()
 
 RC GraceHashJoinPhysicalOperator::partition_input(PhysicalOperator *input, std::vector<std::string> &partition_files)
 {
+  // 重置 spec 缓存标志（每次 partition_input 调用时重置，以便左右表分别缓存）
+  left_specs_cached_ = false;
+  cached_left_specs_.clear();
+  
   // 创建分区文件
   partition_files.resize(num_partitions_);
   std::vector<std::ofstream> partition_streams(num_partitions_);
@@ -159,12 +163,12 @@ RC GraceHashJoinPhysicalOperator::partition_input(PhysicalOperator *input, std::
   }
 
   // 在每个分区文件开头插入tuple数量
-  // 优化：使用临时文件避免一次性读取整个文件到内存
+  // 优化：使用独立的临时文件名（不通过temp_file_mgr_，避免清理问题）
   for (size_t i = 0; i < num_partitions_; i++) {
-    // 创建临时文件
-    std::string temp_file = temp_file_mgr_.create_temp_file("partition_rewrite");
+    // 手动创建临时文件名（不注册到temp_file_mgr_）
+    std::string temp_file = partition_files[i] + ".tmp";
     
-    // 先写入count
+    // 先写入count到临时文件
     std::ofstream ofs(temp_file, std::ios::binary);
     if (!ofs.is_open()) {
       LOG_WARN("failed to create temp file for rewriting: %s", temp_file.c_str());
@@ -187,7 +191,7 @@ RC GraceHashJoinPhysicalOperator::partition_input(PhysicalOperator *input, std::
     }
     ofs.close();
     
-    // 删除原文件，重命名临时文件
+    // 删除原文件，重命名临时文件（临时文件会自动被覆盖）
     std::remove(partition_files[i].c_str());
     std::rename(temp_file.c_str(), partition_files[i].c_str());
     
@@ -238,23 +242,29 @@ Tuple *GraceHashJoinPhysicalOperator::flatten_tuple(const Tuple *tuple) const
     values.push_back(value);
   }
 
-  // 提取所有cell的spec
-  std::vector<TupleCellSpec> specs;
-  specs.reserve(cell_num);
-  for (int i = 0; i < cell_num; i++) {
-    TupleCellSpec spec;
-    RC            rc = tuple->spec_at(i, spec);
-    if (rc != RC::SUCCESS) {
-      specs.push_back(TupleCellSpec("", "", nullptr));
-    } else {
-      specs.push_back(spec);
+  // 优化：缓存 TupleCellSpec，避免重复复制
+  // 使用简单策略：只缓存一份（因为在partition阶段，同一批tuple的schema相同）
+  // 注意：这里使用 cached_left_specs_ 作为通用缓存（左右表都用它）
+  if (!left_specs_cached_) {
+    cached_left_specs_.clear();
+    cached_left_specs_.reserve(cell_num);
+    for (int i = 0; i < cell_num; i++) {
+      TupleCellSpec spec;
+      RC            rc = tuple->spec_at(i, spec);
+      if (rc != RC::SUCCESS) {
+        cached_left_specs_.push_back(TupleCellSpec("", "", nullptr));
+      } else {
+        cached_left_specs_.push_back(spec);
+      }
     }
+    left_specs_cached_ = true;
+    LOG_DEBUG("cached %lu TupleCellSpecs for Grace Hash Join schema", cached_left_specs_.size());
   }
 
-  // 创建ValueListTuple
+  // 创建ValueListTuple，使用缓存的specs
   ValueListTuple *value_list_tuple = new ValueListTuple();
   value_list_tuple->set_cells(values);
-  value_list_tuple->set_names(specs);
+  value_list_tuple->set_names(cached_left_specs_);  // 使用缓存的specs
 
   return value_list_tuple;
 }
@@ -416,6 +426,16 @@ RC GraceHashJoinPhysicalOperator::close()
   // 关闭right分区文件流
   if (right_partition_stream_.is_open()) {
     right_partition_stream_.close();
+  }
+
+  // 清理可能残留的 .tmp 文件（如果 rename 失败）
+  for (const auto &file : left_partition_files_) {
+    std::string tmp_file = file + ".tmp";
+    std::remove(tmp_file.c_str());  // 忽略失败（文件可能不存在）
+  }
+  for (const auto &file : right_partition_files_) {
+    std::string tmp_file = file + ".tmp";
+    std::remove(tmp_file.c_str());  // 忽略失败（文件可能不存在）
   }
 
   // 显式清理临时文件（不等待析构函数）
