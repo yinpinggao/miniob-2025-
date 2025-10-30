@@ -13,8 +13,14 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "order_by_physical_operator.h"
+#include "sql/operator/external_sort/external_sorter.h"
+#include "common/log/log.h"
 
 #include <utility>
+
+#ifdef WITH_MEMTRACER
+#include "memtracer/mt_info.h"
+#endif
 
 OrderByPhysicalOperator::OrderByPhysicalOperator(vector<OrderBySqlNode> order_by) : order_by_(std::move(order_by))
 {
@@ -45,6 +51,15 @@ OrderByPhysicalOperator::OrderByPhysicalOperator(vector<OrderBySqlNode> order_by
   });
 }
 
+OrderByPhysicalOperator::~OrderByPhysicalOperator()
+{
+  // 清理内存排序的数据
+  while (!order_and_field_line.empty()) {
+    delete order_and_field_line.top().second;
+    order_and_field_line.pop();
+  }
+}
+
 RC OrderByPhysicalOperator::fetch_and_sort_tables()
 {
   RC rc = RC::SUCCESS;
@@ -73,25 +88,104 @@ RC OrderByPhysicalOperator::open(Trx *trx)
   if (children_.size() != 1) {
     return RC::INTERNAL;
   }
+  
   rc = children_[0]->open(trx);
   if (OB_FAIL(rc)) {
     return rc;
   }
-  rc = fetch_and_sort_tables();
+
+  // 获取可用内存
+  size_t available_memory = get_available_memory();
+  
+  // 始终使用外部排序，因为它在小数据集下也能正常工作
+  // 且能有效控制内存使用
+  LOG_INFO("using external sort with memory limit: %lu bytes", available_memory);
+  use_external_sort_ = true;
+  rc                 = external_sort_open(trx);
+
   return rc;
 }
 
 RC OrderByPhysicalOperator::next()
 {
-  if (order_and_field_line.empty()) {
-    return RC::RECORD_EOF;
+  if (use_external_sort_) {
+    // 使用外部排序
+    RC rc = external_sorter_->next(tuple_);
+    return rc;
+  } else {
+    // 使用内存排序
+    if (order_and_field_line.empty()) {
+      return RC::RECORD_EOF;
+    }
+
+    tuple_ = order_and_field_line.top().second;
+    order_and_field_line.pop();
+    return RC::SUCCESS;
+  }
+}
+
+RC OrderByPhysicalOperator::close()
+{
+  if (use_external_sort_ && external_sorter_) {
+    external_sorter_->close();
+    external_sorter_.reset();
+  }
+  return children_[0]->close();
+}
+
+Tuple *OrderByPhysicalOperator::current_tuple() { return tuple_; }
+
+size_t OrderByPhysicalOperator::get_available_memory() const
+{
+#ifdef WITH_MEMTRACER
+  size_t limit   = memtracer::memory_limit();
+  size_t current = memtracer::allocated_memory();
+
+  if (limit > 0) {
+    // 使用较小比例的可用内存作为排序缓冲区，为JOIN等操作留足空间
+    const float SAFETY_FACTOR   = 0.08;  // 降低到8%，为大JOIN留足空间
+    size_t      available       = limit > current ? limit - current : 0;
+    size_t      sort_buffer     = static_cast<size_t>(available * SAFETY_FACTOR);
+    const size_t MIN_BUFFER_SIZE = 256 * 1024;   // 最小256KB
+    const size_t MAX_BUFFER_SIZE = 3 * 1024 * 1024;  // 最大3MB，严格控制内存使用
+
+    if (sort_buffer < MIN_BUFFER_SIZE) {
+      sort_buffer = MIN_BUFFER_SIZE;
+    }
+    if (sort_buffer > MAX_BUFFER_SIZE) {
+      sort_buffer = MAX_BUFFER_SIZE;
+    }
+
+    LOG_INFO("memory limit: %lu, current: %lu, available: %lu, sort buffer: %lu", limit, current, available,
+        sort_buffer);
+    return sort_buffer;
+  }
+#endif
+
+  // 没有MemTracer或没有限制，使用默认值
+  return 64 * 1024 * 1024;  // 默认64MB
+}
+
+RC OrderByPhysicalOperator::external_sort_open(Trx *trx)
+{
+  size_t memory_limit = get_available_memory();
+
+  // 创建外部排序器
+  external_sorter_ = std::make_unique<ExternalSorter>(order_by_, memory_limit);
+
+  // 执行排序
+  RC rc = external_sorter_->sort(children_[0].get());
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("external sort failed");
+    return rc;
   }
 
-  tuple_ = order_and_field_line.top().second;
-  order_and_field_line.pop();
+  LOG_INFO("external sort completed successfully");
   return RC::SUCCESS;
 }
 
-RC OrderByPhysicalOperator::close() { return children_[0]->close(); }
-
-Tuple *OrderByPhysicalOperator::current_tuple() { return tuple_; }
+RC OrderByPhysicalOperator::memory_sort_open(Trx *trx)
+{
+  // 原有的内存排序逻辑
+  return fetch_and_sort_tables();
+}

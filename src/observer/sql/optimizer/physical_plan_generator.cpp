@@ -33,6 +33,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/insert_physical_operator.h"
 #include "sql/operator/join_logical_operator.h"
 #include "sql/operator/join_physical_operator.h"
+#include "sql/operator/grace_hash_join_physical_operator.h"
 #include "sql/operator/predicate_logical_operator.h"
 #include "sql/operator/predicate_physical_operator.h"
 #include "sql/operator/project_logical_operator.h"
@@ -393,7 +394,15 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
     return RC::INTERNAL;
   }
 
-  unique_ptr<PhysicalOperator> join_physical_oper(new NestedLoopJoinPhysicalOperator);
+  // 选择Join算法：默认使用Grace Hash Join进行外部连接（支持大数据集）
+  unique_ptr<PhysicalOperator> join_physical_oper;
+  
+  // 使用Grace Hash Join进行外部连接，支持超大数据集
+  const size_t MEMORY_LIMIT = 15 * 1024 * 1024;  // 为每个join分配15MB
+  const size_t NUM_PARTITIONS = 32;               // 32个分区
+  join_physical_oper.reset(new GraceHashJoinPhysicalOperator(MEMORY_LIMIT, NUM_PARTITIONS));
+  LOG_INFO("using Grace Hash Join (external join for large datasets)");
+
   for (auto &child_oper : child_opers) {
     unique_ptr<PhysicalOperator> child_physical_oper;
     rc = create(*child_oper, child_physical_oper);
