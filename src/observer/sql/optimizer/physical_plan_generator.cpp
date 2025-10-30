@@ -56,6 +56,10 @@ See the Mulan PSL v2 for more details. */
 
 #include <sql/operator/vector_scan_physical_operator.h>
 
+#ifdef WITH_MEMTRACER
+#include "memtracer/mt_info.h"
+#endif
+
 using namespace std;
 
 RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<PhysicalOperator> &oper)
@@ -394,14 +398,29 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
     return RC::INTERNAL;
   }
 
-  // 选择Join算法：默认使用Grace Hash Join进行外部连接（支持大数据集）
+  // 选择Join算法：
+  // 1. 如果有 MemTracer 且内存受限，使用 Grace Hash Join（外部连接）
+  // 2. 否则使用 Nested Loop Join（内存连接，适合小数据集）
   unique_ptr<PhysicalOperator> join_physical_oper;
   
-  // 使用Grace Hash Join进行外部连接，支持超大数据集
-  const size_t MEMORY_LIMIT = 15 * 1024 * 1024;  // 为每个join分配15MB
-  const size_t NUM_PARTITIONS = 32;               // 32个分区
-  join_physical_oper.reset(new GraceHashJoinPhysicalOperator(MEMORY_LIMIT, NUM_PARTITIONS));
-  LOG_INFO("using Grace Hash Join (external join for large datasets)");
+#ifdef WITH_MEMTRACER
+  size_t memory_limit = memtracer::memory_limit();
+  if (memory_limit > 0) {
+    // 使用Grace Hash Join进行外部连接，支持超大数据集
+    const size_t JOIN_MEMORY_LIMIT = 15 * 1024 * 1024;  // 为每个join分配15MB
+    const size_t NUM_PARTITIONS = 32;                    // 32个分区
+    join_physical_oper.reset(new GraceHashJoinPhysicalOperator(JOIN_MEMORY_LIMIT, NUM_PARTITIONS));
+    LOG_INFO("using Grace Hash Join (external join for large datasets)");
+  } else {
+    // 使用传统的Nested Loop Join
+    join_physical_oper.reset(new NestedLoopJoinPhysicalOperator());
+    LOG_DEBUG("using Nested Loop Join");
+  }
+#else
+  // 没有 MemTracer，使用传统的 Nested Loop Join
+  join_physical_oper.reset(new NestedLoopJoinPhysicalOperator());
+  LOG_DEBUG("using Nested Loop Join");
+#endif
 
   for (auto &child_oper : child_opers) {
     unique_ptr<PhysicalOperator> child_physical_oper;

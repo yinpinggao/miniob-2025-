@@ -94,14 +94,27 @@ RC OrderByPhysicalOperator::open(Trx *trx)
     return rc;
   }
 
-  // 获取可用内存
-  size_t available_memory = get_available_memory();
-  
-  // 始终使用外部排序，因为它在小数据集下也能正常工作
-  // 且能有效控制内存使用
-  LOG_INFO("using external sort with memory limit: %lu bytes", available_memory);
-  use_external_sort_ = true;
-  rc                 = external_sort_open(trx);
+  // 判断是否使用外部排序：
+  // 1. 如果有 MemTracer 且内存受限，使用外部排序
+  // 2. 否则使用内存排序（更高效，适合小数据集）
+#ifdef WITH_MEMTRACER
+  size_t memory_limit = memtracer::memory_limit();
+  if (memory_limit > 0) {
+    // 如果设置了内存限制，使用外部排序
+    size_t available_memory = get_available_memory();
+    LOG_INFO("using external sort with memory limit: %lu bytes", available_memory);
+    use_external_sort_ = true;
+    rc = external_sort_open(trx);
+  } else {
+    // 没有内存限制，使用内存排序
+    use_external_sort_ = false;
+    rc = memory_sort_open(trx);
+  }
+#else
+  // 没有 MemTracer，使用传统的内存排序
+  use_external_sort_ = false;
+  rc = memory_sort_open(trx);
+#endif
 
   return rc;
 }
