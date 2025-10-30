@@ -41,7 +41,7 @@ public:
 
 private:
   /**
-   * @brief 获取可用内存大小
+   * @brief 获取可用内存大小（用于外部排序的缓冲区）
    */
   size_t get_available_memory() const;
 
@@ -54,6 +54,25 @@ private:
    * @brief 使用内存排序（原有逻辑）
    */
   RC memory_sort_open(Trx *trx);
+
+  /**
+   * @brief 估算输入数据的行数
+   * @details 通过子算子的统计信息或启发式方法估算
+   */
+  size_t estimate_input_rows() const;
+
+  /**
+   * @brief 估算单个Tuple的平均内存大小
+   * @details 基于schema或采样估算
+   */
+  size_t estimate_tuple_size() const;
+
+  /**
+   * @brief 获取内存排序的内存阈值
+   * @details 超过此阈值将使用外部排序
+   * @return 内存阈值（字节）
+   */
+  size_t get_sort_memory_threshold() const;
 
 private:
   std::vector<OrderBySqlNode> order_by_;

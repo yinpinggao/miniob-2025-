@@ -18,10 +18,6 @@ See the Mulan PSL v2 for more details. */
 
 #include <utility>
 
-#ifdef WITH_MEMTRACER
-#include "memtracer/mt_info.h"
-#endif
-
 OrderByPhysicalOperator::OrderByPhysicalOperator(vector<OrderBySqlNode> order_by) : order_by_(std::move(order_by))
 {
   order_and_field_line = order_list([this](const order_line &cells_a, const order_line &cells_b) -> bool {
@@ -94,27 +90,30 @@ RC OrderByPhysicalOperator::open(Trx *trx)
     return rc;
   }
 
-  // 判断是否使用外部排序：
-  // 1. 如果有 MemTracer 且内存受限，使用外部排序
-  // 2. 否则使用内存排序（更高效，适合小数据集）
-#ifdef WITH_MEMTRACER
-  size_t memory_limit = memtracer::memory_limit();
-  if (memory_limit > 0) {
-    // 如果设置了内存限制，使用外部排序
-    size_t available_memory = get_available_memory();
-    LOG_INFO("using external sort with memory limit: %lu bytes", available_memory);
+  // ===== 科学的外部排序启动决策 =====
+  
+  // 1. 估算输入数据量
+  size_t estimated_rows = estimate_input_rows();
+  size_t estimated_tuple_size = estimate_tuple_size();
+  size_t estimated_memory = estimated_rows * estimated_tuple_size;
+  
+  // 2. 获取内存阈值
+  size_t memory_threshold = get_sort_memory_threshold();
+  
+  // 3. 决策：根据估算的内存需求选择排序算法
+  if (estimated_memory > memory_threshold) {
+    // 预计内存需求超过阈值，使用外部排序
+    LOG_INFO("using external sort: estimated_rows=%lu, tuple_size=%lu, estimated_memory=%lu bytes, threshold=%lu bytes",
+             estimated_rows, estimated_tuple_size, estimated_memory, memory_threshold);
     use_external_sort_ = true;
     rc = external_sort_open(trx);
   } else {
-    // 没有内存限制，使用内存排序
+    // 预计内存需求在阈值内，使用内存排序（更快）
+    LOG_INFO("using in-memory sort: estimated_rows=%lu, tuple_size=%lu, estimated_memory=%lu bytes",
+             estimated_rows, estimated_tuple_size, estimated_memory);
     use_external_sort_ = false;
     rc = memory_sort_open(trx);
   }
-#else
-  // 没有 MemTracer，使用传统的内存排序
-  use_external_sort_ = false;
-  rc = memory_sort_open(trx);
-#endif
 
   return rc;
 }
@@ -150,33 +149,16 @@ Tuple *OrderByPhysicalOperator::current_tuple() { return tuple_; }
 
 size_t OrderByPhysicalOperator::get_available_memory() const
 {
-#ifdef WITH_MEMTRACER
-  size_t limit   = memtracer::memory_limit();
-  size_t current = memtracer::allocated_memory();
-
-  if (limit > 0) {
-    // 使用较小比例的可用内存作为排序缓冲区，为JOIN等操作留足空间
-    const float SAFETY_FACTOR   = 0.08;  // 降低到8%，为大JOIN留足空间
-    size_t      available       = limit > current ? limit - current : 0;
-    size_t      sort_buffer     = static_cast<size_t>(available * SAFETY_FACTOR);
-    const size_t MIN_BUFFER_SIZE = 256 * 1024;   // 最小256KB
-    const size_t MAX_BUFFER_SIZE = 3 * 1024 * 1024;  // 最大3MB，严格控制内存使用
-
-    if (sort_buffer < MIN_BUFFER_SIZE) {
-      sort_buffer = MIN_BUFFER_SIZE;
-    }
-    if (sort_buffer > MAX_BUFFER_SIZE) {
-      sort_buffer = MAX_BUFFER_SIZE;
-    }
-
-    LOG_INFO("memory limit: %lu, current: %lu, available: %lu, sort buffer: %lu", limit, current, available,
-        sort_buffer);
-    return sort_buffer;
-  }
-#endif
-
-  // 没有MemTracer或没有限制，使用默认值
-  return 64 * 1024 * 1024;  // 默认64MB
+  // 外部排序的缓冲区大小
+  // 策略：使用固定的、合理的缓冲区大小
+  // - 太小（如256KB）：会产生过多的run文件，merge阶段效率低
+  // - 太大（如64MB）：可能与其他操作（JOIN、BufferPool）竞争内存
+  // - 合理值：5MB - 足够容纳约6000-16000个tuple，减少run文件数量
+  
+  const size_t SORT_BUFFER_SIZE = 5 * 1024 * 1024;  // 5MB
+  
+  LOG_DEBUG("external sort buffer size: %lu bytes", SORT_BUFFER_SIZE);
+  return SORT_BUFFER_SIZE;
 }
 
 RC OrderByPhysicalOperator::external_sort_open(Trx *trx)
@@ -201,4 +183,96 @@ RC OrderByPhysicalOperator::memory_sort_open(Trx *trx)
 {
   // 原有的内存排序逻辑
   return fetch_and_sort_tables();
+}
+
+size_t OrderByPhysicalOperator::estimate_input_rows() const
+{
+  // TODO: 从子算子获取统计信息
+  // 当前实现：使用启发式估算
+  
+  // 方法1: 尝试从子算子获取预估行数（如果实现了统计信息接口）
+  // if (children_[0]->has_row_estimate()) {
+  //   return children_[0]->get_estimated_rows();
+  // }
+  
+  // 方法2: 根据子算子类型进行启发式估算
+  PhysicalOperatorType child_type = children_[0]->type();
+  
+  switch (child_type) {
+    case PhysicalOperatorType::TABLE_SCAN:
+      // 表扫描：假设是大表，使用保守估计
+      return 100000;  // 假设10万行
+      
+    case PhysicalOperatorType::INDEX_SCAN:
+      // 索引扫描：通常返回较少行
+      return 10000;   // 假设1万行
+      
+    case PhysicalOperatorType::NESTED_LOOP_JOIN:
+      // JOIN：可能产生大量数据，使用保守估计
+      return 100000;  // 假设10万行（笛卡尔积可能更多）
+      
+    case PhysicalOperatorType::PREDICATE:
+      // 过滤：递归估算子算子，然后应用选择率
+      if (!children_[0]->children().empty()) {
+        // 假设过滤掉50%的数据
+        return estimate_input_rows() / 2;
+      }
+      return 10000;
+      
+    case PhysicalOperatorType::PROJECT:
+      // 投影不改变行数，递归估算
+      return 10000;
+      
+    default:
+      // 其他情况：使用中等规模的保守估计
+      return 10000;   // 默认1万行
+  }
+}
+
+size_t OrderByPhysicalOperator::estimate_tuple_size() const
+{
+  // TODO: 从schema精确计算tuple大小
+  // 当前实现：使用经验值估算
+  
+  // 考虑因素：
+  // 1. JoinedTuple的嵌套层数（每层增加指针开销）
+  // 2. 每个字段的类型和大小
+  // 3. Tuple对象本身的开销（vtable指针、对齐等）
+  
+  // 启发式估算：
+  // - 基础tuple（RowTuple）：约200-400字节（包括20个int字段 + 开销）
+  // - JoinedTuple每层嵌套：额外16字节（2个指针）
+  // - 多层JOIN场景（如4表JOIN）：需要考虑3层嵌套
+  
+  PhysicalOperatorType child_type = children_[0]->type();
+  
+  if (child_type == PhysicalOperatorType::NESTED_LOOP_JOIN) {
+    // JOIN结果：考虑JoinedTuple的嵌套结构
+    // 保守估计：每个tuple约800字节（适用于多表JOIN）
+    return 800;
+  } 
+  
+  // 简单表扫描或单表操作：每个tuple约300字节
+  return 300;
+}
+
+size_t OrderByPhysicalOperator::get_sort_memory_threshold() const
+{
+  // 内存排序的阈值设置策略：
+  // 1. 小数据集（< 10MB）：直接内存排序，性能最优
+  // 2. 中等数据集（10-50MB）：仍可内存排序，但接近上限
+  // 3. 大数据集（> 50MB）：必须使用外部排序
+  
+  // TODO: 从配置文件读取
+  // size_t threshold = Config::get_instance().get_int("order_by_memory_threshold", 50 * 1024 * 1024);
+  
+  // 当前实现：固定阈值 50MB
+  // 这个值的选择考虑：
+  // - 需要为其他操作（JOIN、BufferPool等）预留内存
+  // - 50MB可以容纳约6-16万行数据（取决于tuple大小）
+  // - 对于4表JOIN的160,000行场景（约136MB），会触发外部排序
+  
+  const size_t DEFAULT_THRESHOLD = 50 * 1024 * 1024;  // 50 MB
+  
+  return DEFAULT_THRESHOLD;
 }

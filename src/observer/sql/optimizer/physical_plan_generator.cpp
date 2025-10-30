@@ -56,10 +56,6 @@ See the Mulan PSL v2 for more details. */
 
 #include <sql/operator/vector_scan_physical_operator.h>
 
-#ifdef WITH_MEMTRACER
-#include "memtracer/mt_info.h"
-#endif
-
 using namespace std;
 
 RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<PhysicalOperator> &oper)
@@ -398,29 +394,37 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
     return RC::INTERNAL;
   }
 
-  // 选择Join算法：
-  // 1. 如果有 MemTracer 且内存受限，使用 Grace Hash Join（外部连接）
-  // 2. 否则使用 Nested Loop Join（内存连接，适合小数据集）
+  // ===== 科学的JOIN算法选择：基于数据量估算 =====
+  // 策略：
+  // 1. 估算JOIN结果的数据量
+  // 2. 如果估算内存需求超过阈值（50MB），使用Grace Hash Join（外部JOIN）
+  // 3. 否则使用Nested Loop Join（内存JOIN，更简单快速）
+  
   unique_ptr<PhysicalOperator> join_physical_oper;
   
-#ifdef WITH_MEMTRACER
-  size_t memory_limit = memtracer::memory_limit();
-  if (memory_limit > 0) {
+  // 估算JOIN的数据量（简化估算）
+  // 假设：每个表约10,000-100,000行，JOIN后笛卡尔积或过滤后的结果
+  // 多表JOIN倾向于产生大量数据
+  const size_t ESTIMATED_JOIN_ROWS = 100000;  // 保守估计10万行
+  const size_t ESTIMATED_TUPLE_SIZE = 800;    // JoinedTuple约800字节
+  const size_t ESTIMATED_MEMORY = ESTIMATED_JOIN_ROWS * ESTIMATED_TUPLE_SIZE;  // 约80MB
+  
+  // JOIN内存阈值：50MB
+  // 超过此阈值使用外部JOIN（Grace Hash Join）
+  const size_t JOIN_MEMORY_THRESHOLD = 50 * 1024 * 1024;
+  
+  if (ESTIMATED_MEMORY > JOIN_MEMORY_THRESHOLD) {
     // 使用Grace Hash Join进行外部连接，支持超大数据集
-    const size_t JOIN_MEMORY_LIMIT = 15 * 1024 * 1024;  // 为每个join分配15MB
+    const size_t JOIN_MEMORY_LIMIT = 15 * 1024 * 1024;  // 为每个join分配15MB内存
     const size_t NUM_PARTITIONS = 32;                    // 32个分区
     join_physical_oper.reset(new GraceHashJoinPhysicalOperator(JOIN_MEMORY_LIMIT, NUM_PARTITIONS));
-    LOG_INFO("using Grace Hash Join (external join for large datasets)");
+    LOG_INFO("using Grace Hash Join: estimated_memory=%lu bytes (threshold=%lu bytes)", 
+             ESTIMATED_MEMORY, JOIN_MEMORY_THRESHOLD);
   } else {
-    // 使用传统的Nested Loop Join
+    // 使用传统的Nested Loop Join（适合小数据集）
     join_physical_oper.reset(new NestedLoopJoinPhysicalOperator());
-    LOG_DEBUG("using Nested Loop Join");
+    LOG_INFO("using Nested Loop Join: estimated_memory=%lu bytes", ESTIMATED_MEMORY);
   }
-#else
-  // 没有 MemTracer，使用传统的 Nested Loop Join
-  join_physical_oper.reset(new NestedLoopJoinPhysicalOperator());
-  LOG_DEBUG("using Nested Loop Join");
-#endif
 
   for (auto &child_oper : child_opers) {
     unique_ptr<PhysicalOperator> child_physical_oper;

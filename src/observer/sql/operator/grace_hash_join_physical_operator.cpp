@@ -153,30 +153,45 @@ RC GraceHashJoinPhysicalOperator::partition_input(PhysicalOperator *input, std::
     delete tuple;
   }
 
-  // 写入每个分区的tuple数量（在文件开头）
+  // 关闭所有分区文件
   for (size_t i = 0; i < num_partitions_; i++) {
     partition_streams[i].close();
+  }
 
-    // 重新打开文件，在开头写入count
-    std::fstream fs(partition_files[i], std::ios::in | std::ios::out | std::ios::binary);
-    if (fs.is_open()) {
-      // 读取原内容
-      fs.seekg(0, std::ios::end);
-      size_t      file_size = fs.tellg();
-      fs.seekg(0, std::ios::beg);
-      std::vector<char> buffer(file_size);
-      fs.read(buffer.data(), file_size);
-
-      // 重写文件：先写count，再写原内容
-      fs.close();
-      std::ofstream ofs(partition_files[i], std::ios::binary | std::ios::trunc);
-      size_t        count = partition_counts[i];
-      ofs.write(reinterpret_cast<const char *>(&count), sizeof(count));
-      ofs.write(buffer.data(), file_size);
-      ofs.close();
-
-      LOG_DEBUG("partition %lu: %lu tuples", i, count);
+  // 在每个分区文件开头插入tuple数量
+  // 优化：使用临时文件避免一次性读取整个文件到内存
+  for (size_t i = 0; i < num_partitions_; i++) {
+    // 创建临时文件
+    std::string temp_file = temp_file_mgr_.create_temp_file("partition_rewrite");
+    
+    // 先写入count
+    std::ofstream ofs(temp_file, std::ios::binary);
+    if (!ofs.is_open()) {
+      LOG_WARN("failed to create temp file for rewriting: %s", temp_file.c_str());
+      continue;
     }
+    
+    size_t count = partition_counts[i];
+    ofs.write(reinterpret_cast<const char *>(&count), sizeof(count));
+    
+    // 分块复制原文件内容（避免一次性读取整个文件）
+    std::ifstream ifs(partition_files[i], std::ios::binary);
+    if (ifs.is_open()) {
+      const size_t BUFFER_SIZE = 64 * 1024; // 64KB缓冲区
+      char buffer[BUFFER_SIZE];
+      
+      while (ifs.read(buffer, BUFFER_SIZE) || ifs.gcount() > 0) {
+        ofs.write(buffer, ifs.gcount());
+      }
+      ifs.close();
+    }
+    ofs.close();
+    
+    // 删除原文件，重命名临时文件
+    std::remove(partition_files[i].c_str());
+    std::rename(temp_file.c_str(), partition_files[i].c_str());
+    
+    LOG_DEBUG("partition %lu: %lu tuples", i, count);
   }
 
   LOG_INFO("partitioned %lu tuples into %lu partitions", total_tuples, num_partitions_);
@@ -383,22 +398,30 @@ RC GraceHashJoinPhysicalOperator::join_partition(size_t partition_id)
 
 RC GraceHashJoinPhysicalOperator::close()
 {
-  // 清理内存
+  // 清理build side tuples
   for (Tuple *t : build_tuples_) {
     delete t;
   }
   build_tuples_.clear();
 
+  // 清理当前的right tuple
   if (current_right_tuple_ != nullptr) {
     delete current_right_tuple_;
     current_right_tuple_ = nullptr;
   }
 
+  // current_left_tuple_只是指向build_tuples_中的元素，已经被清理，只需置空
+  current_left_tuple_ = nullptr;
+
+  // 关闭right分区文件流
   if (right_partition_stream_.is_open()) {
     right_partition_stream_.close();
   }
 
-  // 清理分区文件会在TempFileManager析构时自动完成
+  // 显式清理临时文件（不等待析构函数）
+  temp_file_mgr_.cleanup_all();
+
+  // 清理分区文件列表
   left_partition_files_.clear();
   right_partition_files_.clear();
 
