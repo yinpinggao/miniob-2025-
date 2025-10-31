@@ -44,8 +44,15 @@ OrderByPhysicalOperator::OrderByPhysicalOperator(vector<OrderBySqlNode> order_by
       }
     }
 
-    // order_line_a == order_line_b
-    // 使用指针地址打破平局，保证严格弱序
+    // order_line_a == order_line_b，进一步比较整行，保证严格弱序
+    int row_cmp = 0;
+    if (cells_a.second != nullptr && cells_b.second != nullptr) {
+      RC rc = cells_a.second->compare(*cells_b.second, row_cmp);
+      if (rc == RC::SUCCESS && row_cmp != 0) {
+        return row_cmp > 0;
+      }
+    }
+    // 最后使用指针地址兜底，避免完全相等时返回true
     return cells_a.second > cells_b.second;
   });
 }
