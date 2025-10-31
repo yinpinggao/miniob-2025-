@@ -353,20 +353,27 @@ RC ExternalSorter::RunReader::next(Tuple *&tuple)
     return RC::RECORD_EOF;
   }
 
-  // 使用普通的反序列化方法
-  // 注意：虽然这会重复创建TupleCellSpec，但文件格式中每个tuple都包含完整specs
-  // 未来优化：可以修改文件格式，在文件头写入schema，每个tuple只写values
-  RC rc = TupleSerializer::deserialize(file_, current_tuple_);
+  tuple = nullptr;
+
+  Tuple *new_tuple = nullptr;
+  RC     rc        = TupleSerializer::deserialize(file_, new_tuple);
+  if (rc == RC::RECORD_EOF) {
+    has_next_ = false;
+    return RC::RECORD_EOF;
+  }
   if (rc != RC::SUCCESS) {
-    if (file_.eof()) {
-      has_next_ = false;
-      return RC::RECORD_EOF;
+    if (new_tuple != nullptr) {
+      delete new_tuple;
+      new_tuple = nullptr;
     }
     LOG_WARN("failed to deserialize tuple");
+    has_next_ = false;
     return rc;
   }
 
-  tuple = current_tuple_;
+  current_tuple_ = new_tuple;
+  tuple          = current_tuple_;
+  current_tuple_ = nullptr;
   return RC::SUCCESS;
 }
 
@@ -385,4 +392,3 @@ void ExternalSorter::RunReader::close()
   cached_specs_.clear();
   specs_cached_ = false;
 }
-

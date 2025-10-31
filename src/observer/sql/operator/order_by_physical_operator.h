@@ -60,6 +60,9 @@ private:
    * @details 通过子算子的统计信息或启发式方法估算
    */
   size_t estimate_input_rows() const;
+  size_t estimate_input_rows_internal(PhysicalOperator *op) const;
+  PhysicalOperator *unwrap_single_child(PhysicalOperator *op) const;
+  int    calc_join_depth(PhysicalOperator *op) const;
 
   /**
    * @brief 估算单个Tuple的平均内存大小
@@ -88,4 +91,5 @@ private:
   bool                            use_external_sort_ = false;
 
   Tuple *tuple_ = nullptr;
+  std::unique_ptr<Tuple> tuple_holder_;
 };

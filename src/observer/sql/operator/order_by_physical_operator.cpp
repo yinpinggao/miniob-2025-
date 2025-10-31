@@ -56,6 +56,8 @@ OrderByPhysicalOperator::~OrderByPhysicalOperator()
     delete order_and_field_line.top().second;
     order_and_field_line.pop();
   }
+  tuple_holder_.reset();
+  tuple_ = nullptr;
 }
 
 RC OrderByPhysicalOperator::fetch_and_sort_tables()
@@ -86,6 +88,9 @@ RC OrderByPhysicalOperator::open(Trx *trx)
   if (children_.size() != 1) {
     return RC::INTERNAL;
   }
+
+  tuple_holder_.reset();
+  tuple_ = nullptr;
   
   rc = children_[0]->open(trx);
   if (OB_FAIL(rc)) {
@@ -124,16 +129,28 @@ RC OrderByPhysicalOperator::next()
 {
   if (use_external_sort_) {
     // 使用外部排序
-    RC rc = external_sorter_->next(tuple_);
+    Tuple *next_tuple = nullptr;
+    RC     rc         = external_sorter_->next(next_tuple);
+    if (rc == RC::SUCCESS) {
+      tuple_holder_.reset(next_tuple);
+      tuple_ = tuple_holder_.get();
+    } else {
+      tuple_holder_.reset();
+      tuple_ = nullptr;
+    }
     return rc;
   } else {
     // 使用内存排序
     if (order_and_field_line.empty()) {
+      tuple_holder_.reset();
+      tuple_ = nullptr;
       return RC::RECORD_EOF;
     }
 
-    tuple_ = order_and_field_line.top().second;
+    Tuple *next_tuple = order_and_field_line.top().second;
     order_and_field_line.pop();
+    tuple_holder_.reset(next_tuple);
+    tuple_ = tuple_holder_.get();
     return RC::SUCCESS;
   }
 }
@@ -144,6 +161,8 @@ RC OrderByPhysicalOperator::close()
     external_sorter_->close();
     external_sorter_.reset();
   }
+  tuple_holder_.reset();
+  tuple_ = nullptr;
   return children_[0]->close();
 }
 
@@ -189,110 +208,137 @@ RC OrderByPhysicalOperator::memory_sort_open(Trx *trx)
 
 size_t OrderByPhysicalOperator::estimate_input_rows() const
 {
-  // TODO: 从子算子获取统计信息
-  // 当前实现：使用启发式估算
-  
-  // 方法1: 尝试从子算子获取预估行数（如果实现了统计信息接口）
-  // if (children_[0]->has_row_estimate()) {
-  //   return children_[0]->get_estimated_rows();
-  // }
-  
-  // 方法2: 根据子算子类型进行启发式估算
-  PhysicalOperatorType child_type = children_[0]->type();
-  
-  switch (child_type) {
+  return estimate_input_rows_internal(children_[0].get());
+}
+
+size_t OrderByPhysicalOperator::estimate_input_rows_internal(PhysicalOperator *op) const
+{
+  if (op == nullptr) {
+    return 0;
+  }
+
+  switch (op->type()) {
     case PhysicalOperatorType::TABLE_SCAN:
-      // 表扫描：默认假设小表
-      return 1000;  // 默认1000行（适合大多数测试）
-      
+    case PhysicalOperatorType::TABLE_SCAN_VEC:
+      return 1000;
     case PhysicalOperatorType::INDEX_SCAN:
-      // 索引扫描：通常返回较少行
-      return 500;   // 默认500行
-      
+      return 500;
+    case PhysicalOperatorType::VECTOR_INDEX_SCAN:
+      return 200;
     case PhysicalOperatorType::GRACE_HASH_JOIN:
-      // Grace Hash Join：说明是大数据集多表JOIN
-      // 这是外部算法，专门处理大数据集
-      return 100000;  // 10万行
-      
     case PhysicalOperatorType::NESTED_LOOP_JOIN: {
-      // Nested Loop JOIN：递归计算JOIN深度
-      std::function<int(PhysicalOperator*)> calc_join_depth = [&](PhysicalOperator* op) -> int {
-        if (op == nullptr) {
-          return 0;
-        }
-        PhysicalOperatorType op_type = op->type();
-        if (op_type != PhysicalOperatorType::NESTED_LOOP_JOIN && 
-            op_type != PhysicalOperatorType::GRACE_HASH_JOIN) {
-          return 0;  // 非JOIN节点深度为0
-        }
-        // JOIN节点：深度 = 1 + max(左子树深度, 右子树深度)
-        int left_depth = 0;
-        int right_depth = 0;
-        auto& child_ops = op->children();
-        if (child_ops.size() >= 1) {
-          left_depth = calc_join_depth(child_ops[0].get());
-        }
-        if (child_ops.size() >= 2) {
-          right_depth = calc_join_depth(child_ops[1].get());
-        }
-        return 1 + std::max(left_depth, right_depth);
-      };
-      
-      // 计算JOIN深度（包括自己）
-      int join_depth = calc_join_depth(children_[0].get());
-      
-      // 根据JOIN深度估算
+      size_t left_rows  = op->children().size() > 0 ? estimate_input_rows_internal(op->children()[0].get()) : 1000;
+      size_t right_rows = op->children().size() > 1 ? estimate_input_rows_internal(op->children()[1].get()) : 1000;
+      // 对乘积做上限，避免估计爆炸，同时保证至少返回两侧的较大值
+      const size_t cap = 200000;
+      size_t       estimate = left_rows * std::max<size_t>(right_rows, 1);
+      if (estimate > cap) {
+        estimate = cap;
+      }
+      estimate = std::max<size_t>(estimate, std::max(left_rows, right_rows));
+
+      // 如果JOIN层级较深，提升估计结果，触发外部排序
+      int join_depth = calc_join_depth(op);
       if (join_depth >= 3) {
-        // 深度JOIN（4+表），可能是big_order_by场景
-        return 100000;  // 10万行
-      } else {
-        // 简单JOIN（1-3表）
-        return 1000;    // 1000行
+        estimate = std::max<size_t>(estimate, 150000);
+      } else if (join_depth == 2) {
+        estimate = std::max<size_t>(estimate, 80000);
       }
+      return estimate;
     }
-      
     case PhysicalOperatorType::PREDICATE:
-      // 过滤：递归估算子算子，然后应用选择率
-      if (!children_[0]->children().empty()) {
-        // 假设过滤掉50%的数据
-        return estimate_input_rows() / 2;
+    case PhysicalOperatorType::PREDICATE_VEC:
+    case PhysicalOperatorType::PROJECT:
+    case PhysicalOperatorType::PROJECT_VEC:
+    case PhysicalOperatorType::LIMIT:
+    case PhysicalOperatorType::ORDER_BY:
+    case PhysicalOperatorType::CALC:
+    case PhysicalOperatorType::EXPR_VEC:
+    case PhysicalOperatorType::SCALAR_GROUP_BY:
+    case PhysicalOperatorType::HASH_GROUP_BY:
+    case PhysicalOperatorType::GROUP_BY_VEC:
+    case PhysicalOperatorType::AGGREGATE_VEC:
+    case PhysicalOperatorType::UNION:
+      if (!op->children().empty()) {
+        return estimate_input_rows_internal(op->children()[0].get());
       }
       return 1000;
-      
-    case PhysicalOperatorType::PROJECT:
-      // 投影不改变行数，默认小数据集
-      return 1000;
-      
     default:
-      // 其他情况：使用小规模估计
-      return 1000;   // 默认1000行
+      return 1000;
+  }
+}
+
+PhysicalOperator *OrderByPhysicalOperator::unwrap_single_child(PhysicalOperator *op) const
+{
+  if (op == nullptr) {
+    return nullptr;
+  }
+  switch (op->type()) {
+    case PhysicalOperatorType::PROJECT:
+    case PhysicalOperatorType::PROJECT_VEC:
+    case PhysicalOperatorType::PREDICATE:
+    case PhysicalOperatorType::PREDICATE_VEC:
+    case PhysicalOperatorType::LIMIT:
+    case PhysicalOperatorType::EXPR_VEC:
+    case PhysicalOperatorType::ORDER_BY:
+    case PhysicalOperatorType::CALC:
+    case PhysicalOperatorType::UNION:
+      if (!op->children().empty()) {
+        return unwrap_single_child(op->children()[0].get());
+      }
+      return op;
+    default:
+      return op;
+  }
+}
+
+int OrderByPhysicalOperator::calc_join_depth(PhysicalOperator *op) const
+{
+  if (op == nullptr) {
+    return 0;
+  }
+  PhysicalOperator *real_op = unwrap_single_child(op);
+  if (real_op == nullptr) {
+    return 0;
+  }
+
+  switch (real_op->type()) {
+    case PhysicalOperatorType::NESTED_LOOP_JOIN:
+    case PhysicalOperatorType::GRACE_HASH_JOIN: {
+      int left_depth  = real_op->children().size() > 0 ? calc_join_depth(real_op->children()[0].get()) : 0;
+      int right_depth = real_op->children().size() > 1 ? calc_join_depth(real_op->children()[1].get()) : 0;
+      return 1 + std::max(left_depth, right_depth);
+    }
+    default:
+      if (!real_op->children().empty()) {
+        return calc_join_depth(real_op->children()[0].get());
+      }
+      return 0;
   }
 }
 
 size_t OrderByPhysicalOperator::estimate_tuple_size() const
 {
-  // TODO: 从schema精确计算tuple大小
-  // 当前实现：使用经验值估算
-  
-  // 考虑因素：
-  // 1. JoinedTuple的嵌套层数（每层增加指针开销）
-  // 2. 每个字段的类型和大小
-  // 3. Tuple对象本身的开销（vtable指针、对齐等）
-  
-  // 启发式估算：
-  // - 基础tuple（RowTuple）：约200-400字节（包括20个int字段 + 开销）
-  // - JoinedTuple每层嵌套：额外16字节（2个指针）
-  // - 多层JOIN场景（如4表JOIN）：需要考虑3层嵌套
-  
-  PhysicalOperatorType child_type = children_[0]->type();
-  
-  if (child_type == PhysicalOperatorType::NESTED_LOOP_JOIN) {
-    // JOIN结果：考虑JoinedTuple的嵌套结构
-    // 保守估计：每个tuple约800字节（适用于多表JOIN）
-    return 800;
-  } 
-  
-  // 简单表扫描或单表操作：每个tuple约300字节
+  TupleSchema schema;
+  RC          rc = children_[0]->tuple_schema(schema);
+  if (rc == RC::SUCCESS && schema.cell_num() > 0) {
+    const size_t base_overhead = 64;
+    const size_t per_cell      = 24;
+    size_t       estimate      = base_overhead + per_cell * static_cast<size_t>(schema.cell_num());
+    int          join_depth    = calc_join_depth(children_[0].get());
+    if (join_depth > 0) {
+      estimate += static_cast<size_t>(join_depth) * 64;
+    }
+    return std::max<size_t>(estimate, 300);
+  }
+
+  PhysicalOperator *effective_child = unwrap_single_child(children_[0].get());
+  PhysicalOperatorType child_type   = effective_child != nullptr ? effective_child->type() : children_[0]->type();
+
+  if (child_type == PhysicalOperatorType::NESTED_LOOP_JOIN || child_type == PhysicalOperatorType::GRACE_HASH_JOIN) {
+    return 1000;
+  }
+
   return 300;
 }
 

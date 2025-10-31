@@ -203,7 +203,7 @@ RC PlainCommunicator::write_result_internal(SessionEvent *event, bool &need_disc
   for (int i = 0; i < cell_num; i++) {
     const TupleCellSpec &spec  = schema.cell_at(i);
     const char          *alias = spec.alias();
-    if (nullptr != alias || alias[0] != 0) {
+    if (alias != nullptr && alias[0] != 0) {
       if (0 != i) {
         title_stream << " | ";
       }
@@ -215,6 +215,19 @@ RC PlainCommunicator::write_result_internal(SessionEvent *event, bool &need_disc
     title_stream << '\n';  // 将换行符存入流中
   }
 
+  std::string header = title_stream.str();
+  title_stream.str("");
+  title_stream.clear();
+
+  if (!header.empty()) {
+    rc = writer_->writen(header.c_str(), header.size());
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to send header to client. err=%s", strerror(errno));
+      sql_result->close();
+      return rc;
+    }
+  }
+
   if (event->session()->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR && event->session()->used_chunk_mode()) {
     rc = write_chunk_result(sql_result);
   } else {
@@ -222,41 +235,9 @@ RC PlainCommunicator::write_result_internal(SessionEvent *event, bool &need_disc
   }
 
   if (OB_FAIL(rc)) {
-    // 清空输出流，避免下次查询输出上次查询失败未输出的内容
-    title_stream.str("");       // 清空流内容
-    title_stream.clear();       // 重置流状态标志
-    sql_result_stream.str("");  // 清空流内容
-    sql_result_stream.clear();  // 重置流状态标志
     sql_result->close();
     sql_result->set_return_code(rc);
     return write_state(event, need_disconnect);
-  } else {
-    // 将 title_stream 中的内容一次性写入到 writer_
-    std::string buffer = title_stream.str();  // 获取整个缓冲区的内容
-    title_stream.str("");                     // 清空流内容
-    title_stream.clear();                     // 重置流状态（但不会清空内容）
-
-    rc = writer_->writen(buffer.c_str(), buffer.size());
-    if (OB_FAIL(rc)) {
-      LOG_WARN("failed to send data to client. err=%s", strerror(errno));
-      sql_result->close();
-      return rc;
-    }
-
-    buffer.clear();  // 清空字符串内容
-
-    // 将 sql_result_stream 中的内容一次性写入到 writer_
-    buffer = sql_result_stream.str();  // 获取缓冲区的内容
-    sql_result_stream.str("");         // 清空流内容
-    sql_result_stream.clear();         // 重置流状态
-
-    rc = writer_->writen(buffer.c_str(), buffer.size());
-    buffer.clear();  // 清空字符串内容
-    if (OB_FAIL(rc)) {
-      LOG_WARN("failed to send data to client. err=%s", strerror(errno));
-      sql_result->close();
-      return rc;
-    }
   }
 
   if (cell_num == 0) {
@@ -290,10 +271,18 @@ RC PlainCommunicator::write_tuple_result(SqlResult *sql_result)
     assert(tuple != nullptr);
 
     int cell_num = tuple->cell_num();
+    bool first_cell = true;
     for (int i = 0; i < cell_num; i++) {
-      if (i != 0) {
+      if (!first_cell) {
         const char *delim = " | ";
-        sql_result_stream << delim;  // 将分隔符存入流中
+        RC          tmp_rc = writer_->writen(delim, strlen(delim));
+        if (OB_FAIL(tmp_rc)) {
+          LOG_WARN("failed to send delimiter to client. err=%s", strerror(errno));
+          sql_result->close();
+          return tmp_rc;
+        }
+      } else {
+        first_cell = false;
       }
 
       Value value;
@@ -306,11 +295,22 @@ RC PlainCommunicator::write_tuple_result(SqlResult *sql_result)
 
       // 将cell的值存入流中
       std::string cell_str = value.to_string();
-      sql_result_stream << cell_str;
+      RC          tmp_rc   = writer_->writen(cell_str.data(), cell_str.size());
+      if (OB_FAIL(tmp_rc)) {
+        LOG_WARN("failed to send cell to client. err=%s", strerror(errno));
+        sql_result->close();
+        return tmp_rc;
+      }
     }
 
     // 将换行符存入流中
-    sql_result_stream << '\n';
+    const char newline = '\n';
+    RC         tmp_rc  = writer_->writen(&newline, 1);
+    if (OB_FAIL(tmp_rc)) {
+      LOG_WARN("failed to send newline to client. err=%s", strerror(errno));
+      sql_result->close();
+      return tmp_rc;
+    }
   }
 
   if (rc == RC::RECORD_EOF) {
