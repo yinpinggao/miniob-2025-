@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/external_sort/tuple_serializer.h"
 #include "common/log/log.h"
 #include "sql/expr/tuple.h"
+#include <cstdint>
 #include <cstring>
 
 RC TupleSerializer::serialize(std::ostream &os, const Tuple *tuple)
@@ -79,6 +80,21 @@ RC TupleSerializer::serialize(std::ostream &os, const Tuple *tuple)
     if (rc != RC::SUCCESS) {
       LOG_WARN("failed to serialize value at %d", i);
       return rc;
+    }
+  }
+
+  const auto *value_list_tuple = dynamic_cast<const ValueListTuple *>(tuple);
+  uint8_t     has_order_keys   = (value_list_tuple != nullptr && value_list_tuple->has_order_keys()) ? 1 : 0;
+  os.write(reinterpret_cast<const char *>(&has_order_keys), sizeof(has_order_keys));
+  if (has_order_keys) {
+    size_t key_count = value_list_tuple->order_keys().size();
+    os.write(reinterpret_cast<const char *>(&key_count), sizeof(key_count));
+    for (const Value &key : value_list_tuple->order_keys()) {
+      RC rc = serialize_value(os, key);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to serialize order key");
+        return rc;
+      }
     }
   }
 
@@ -183,6 +199,37 @@ RC TupleSerializer::deserialize(std::istream &is, Tuple *&tuple)
   ValueListTuple *value_list_tuple = new ValueListTuple();
   value_list_tuple->set_cells(values);
   value_list_tuple->set_names(specs);
+
+  uint8_t has_order_keys_flag = 0;
+  is.read(reinterpret_cast<char *>(&has_order_keys_flag), sizeof(has_order_keys_flag));
+  if (!is.good()) {
+    LOG_WARN("failed to read order key flag");
+    delete value_list_tuple;
+    return RC::IOERR_READ;
+  }
+
+  if (has_order_keys_flag != 0) {
+    size_t key_count = 0;
+    is.read(reinterpret_cast<char *>(&key_count), sizeof(key_count));
+    if (!is.good() || key_count > 10000) {
+      LOG_WARN("failed to read order key count: %zu", key_count);
+      delete value_list_tuple;
+      return RC::IOERR_READ;
+    }
+    std::vector<Value> order_keys;
+    order_keys.reserve(key_count);
+    for (size_t i = 0; i < key_count; i++) {
+      Value key;
+      RC    rc = deserialize_value(is, key);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to deserialize order key %zu", i);
+        delete value_list_tuple;
+        return rc;
+      }
+      order_keys.push_back(std::move(key));
+    }
+    value_list_tuple->set_order_keys(std::move(order_keys));
+  }
 
   tuple = value_list_tuple;
   return RC::SUCCESS;
@@ -303,10 +350,40 @@ RC TupleSerializer::deserialize_with_cached_specs(std::istream &is, Tuple *&tupl
     values.push_back(std::move(value));
   }
 
+  uint8_t has_order_keys_flag = 0;
+  is.read(reinterpret_cast<char *>(&has_order_keys_flag), sizeof(has_order_keys_flag));
+  if (!is.good()) {
+    LOG_WARN("failed to read order key flag");
+    return RC::IOERR_READ;
+  }
+
+  std::vector<Value> order_keys;
+  if (has_order_keys_flag != 0) {
+    size_t key_count = 0;
+    is.read(reinterpret_cast<char *>(&key_count), sizeof(key_count));
+    if (!is.good() || key_count > 10000) {
+      LOG_WARN("failed to read order key count: %zu", key_count);
+      return RC::IOERR_READ;
+    }
+    order_keys.reserve(key_count);
+    for (size_t i = 0; i < key_count; i++) {
+      Value key;
+      RC    rc = deserialize_value(is, key);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to deserialize order key %zu", i);
+        return rc;
+      }
+      order_keys.push_back(std::move(key));
+    }
+  }
+
   // 创建ValueListTuple，使用缓存的specs
   ValueListTuple *value_list_tuple = new ValueListTuple();
   value_list_tuple->set_cells(values);
   value_list_tuple->set_names(cached_specs);  // 使用缓存的specs
+  if (!order_keys.empty()) {
+    value_list_tuple->set_order_keys(std::move(order_keys));
+  }
 
   tuple = value_list_tuple;
   return RC::SUCCESS;
@@ -334,6 +411,20 @@ size_t TupleSerializer::estimate_size(const Tuple *tuple)
     if (!value.is_null()) {
       size += value.length();
     }
+  }
+
+  const auto *value_list_tuple = dynamic_cast<const ValueListTuple *>(tuple);
+  if (value_list_tuple != nullptr && value_list_tuple->has_order_keys()) {
+    size += sizeof(uint8_t);  // flag
+    size += sizeof(size_t);   // count
+    for (const Value &key : value_list_tuple->order_keys()) {
+      size += sizeof(AttrType) + sizeof(int) + sizeof(bool);
+      if (!key.is_null()) {
+        size += key.length();
+      }
+    }
+  } else {
+    size += sizeof(uint8_t);  // flag
   }
 
   return size;
@@ -492,4 +583,3 @@ RC TupleSerializer::deserialize_value(std::istream &is, Value &value)
 
   return RC::SUCCESS;
 }
-

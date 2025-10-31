@@ -110,11 +110,28 @@ RC OrderByPhysicalOperator::open(Trx *trx)
   // 2. 获取内存阈值
   size_t memory_threshold = get_sort_memory_threshold();
   
-  // 3. 决策：根据估算的内存需求选择排序算法
-  if (estimated_memory > memory_threshold) {
+  TupleSchema output_schema;
+  RC          schema_rc = children_[0]->tuple_schema(output_schema);
+  size_t      column_cnt = schema_rc == RC::SUCCESS ? static_cast<size_t>(output_schema.cell_num()) : 0;
+  int         join_depth = calc_join_depth(children_[0].get());
+
+  bool prefer_external = (estimated_memory > memory_threshold);
+  if (!prefer_external) {
+    if (schema_rc == RC::SUCCESS && column_cnt >= 40 && join_depth >= 2) {
+      prefer_external = true;
+    } else if ((schema_rc != RC::SUCCESS || column_cnt == 0) && join_depth >= 2) {
+      prefer_external = true;
+    } else if (estimated_rows >= 80000 && column_cnt >= 32) {
+      prefer_external = true;
+    }
+  }
+
+  // 3. 决策：根据估算的内存需求和启发式判断选择排序算法
+  if (prefer_external) {
+    const char *reason = (estimated_memory > memory_threshold) ? "memory_estimate" : "heuristic";
     // 预计内存需求超过阈值，使用外部排序
-    LOG_INFO("using external sort: estimated_rows=%lu, tuple_size=%lu, estimated_memory=%lu bytes, threshold=%lu bytes",
-             estimated_rows, estimated_tuple_size, estimated_memory, memory_threshold);
+    LOG_INFO("using external sort (%s): estimated_rows=%lu, tuple_size=%lu, estimated_memory=%lu bytes, threshold=%lu bytes",
+             reason, estimated_rows, estimated_tuple_size, estimated_memory, memory_threshold);
     use_external_sort_ = true;
     rc = external_sort_open(trx);
   } else {

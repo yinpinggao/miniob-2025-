@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/external_sort/tuple_serializer.h"
 #include "common/log/log.h"
 #include <algorithm>
+#include <memory>
 
 ExternalSorter::ExternalSorter(const std::vector<OrderBySqlNode> &order_by, size_t memory_limit)
     : order_by_(order_by), memory_limit_(memory_limit), current_memory_(0), merge_heap_(nullptr), sorted_(false)
@@ -258,6 +259,18 @@ RC ExternalSorter::close()
 
 bool ExternalSorter::compare_tuples(const Tuple *t1, const Tuple *t2) const
 {
+  const auto *vl1 = dynamic_cast<const ValueListTuple *>(t1);
+  const auto *vl2 = dynamic_cast<const ValueListTuple *>(t2);
+  if (vl1 != nullptr && vl2 != nullptr && vl1->has_order_keys() && vl2->has_order_keys() &&
+      vl1->order_keys().size() == order_by_.size() && vl2->order_keys().size() == order_by_.size()) {
+    for (size_t i = 0; i < order_by_.size(); i++) {
+      int cmp = vl1->order_keys()[i].compare(vl2->order_keys()[i]);
+      if (cmp != 0) {
+        return order_by_[i].is_asc ? (cmp > 0) : (cmp < 0);
+      }
+    }
+  }
+
   for (const auto &order : order_by_) {
     Value v1, v2;
     RC    rc1 = order.expr->get_value(*t1, v1);
@@ -340,11 +353,29 @@ Tuple *ExternalSorter::flatten_tuple(const Tuple *tuple) const
   }
 
   // 创建ValueListTuple，使用缓存的specs
-  ValueListTuple *value_list_tuple = new ValueListTuple();
+  auto value_list_tuple = std::make_unique<ValueListTuple>();
   value_list_tuple->set_cells(values);
   value_list_tuple->set_names(cached_specs_);  // 使用缓存的specs
 
-  return value_list_tuple;
+  std::vector<Value> order_keys;
+  order_keys.reserve(order_by_.size());
+  bool keys_valid = true;
+  for (const auto &order : order_by_) {
+    Value key;
+    RC    rc = order.expr->get_value(*tuple, key);
+    if (rc != RC::SUCCESS) {
+      keys_valid = false;
+      break;
+    }
+    Value deep_key;
+    deep_key.set_value(key);
+    order_keys.emplace_back(std::move(deep_key));
+  }
+  if (keys_valid) {
+    value_list_tuple->set_order_keys(std::move(order_keys));
+  }
+
+  return value_list_tuple.release();
 }
 
 // RunReader implementation

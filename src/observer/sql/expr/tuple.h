@@ -370,7 +370,11 @@ public:
   virtual ~ValueListTuple() = default;
 
   void set_names(const std::vector<TupleCellSpec> &specs) { specs_ = specs; }
-  void set_cells(const std::vector<Value> &cells) { cells_ = cells; }
+  void set_cells(const std::vector<Value> &cells)
+  {
+    cells_ = cells;
+    clear_order_keys();
+  }
 
   virtual int cell_num() const override { return static_cast<int>(cells_.size()); }
 
@@ -435,12 +439,32 @@ public:
     auto copy    = new ValueListTuple;
     copy->cells_ = cells_;
     copy->specs_ = specs_;
+    copy->order_keys_     = order_keys_;
+    copy->has_order_keys_ = has_order_keys_;
     return copy;
+  }
+
+  void set_order_keys(std::vector<Value> keys)
+  {
+    order_keys_     = std::move(keys);
+    has_order_keys_ = !order_keys_.empty();
+  }
+
+  bool has_order_keys() const { return has_order_keys_; }
+
+  const std::vector<Value> &order_keys() const { return order_keys_; }
+
+  void clear_order_keys()
+  {
+    order_keys_.clear();
+    has_order_keys_ = false;
   }
 
 private:
   std::vector<Value>         cells_;
   std::vector<TupleCellSpec> specs_;
+  std::vector<Value>         order_keys_;
+  bool                       has_order_keys_ = false;
 };
 
 /**
