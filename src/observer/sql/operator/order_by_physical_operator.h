@@ -86,6 +86,8 @@ private:
   using order_list = std::priority_queue<order_line, vector<order_line>, order_func>;
   order_list order_and_field_line;
 
+  RC copy_current_tuple_as_value_list(Tuple *src_tuple, Tuple *&dest_tuple);
+
   // 外部排序使用的数据结构
   std::unique_ptr<ExternalSorter> external_sorter_;
   bool                            use_external_sort_ = false;

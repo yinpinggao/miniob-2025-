@@ -84,7 +84,13 @@ RC OrderByPhysicalOperator::fetch_and_sort_tables()
       order_by_line.emplace_back(cell);
     }
 
-    order_and_field_line.emplace(order_by_line, children_[0]->current_tuple()->copy());
+    Tuple *copied_tuple = nullptr;
+    rc                  = copy_current_tuple_as_value_list(children_[0]->current_tuple(), copied_tuple);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+
+    order_and_field_line.emplace(order_by_line, copied_tuple);
   }
 
   return RC::SUCCESS;
@@ -212,6 +218,23 @@ RC OrderByPhysicalOperator::memory_sort_open(Trx *trx)
 {
   // 原有的内存排序逻辑
   return fetch_and_sort_tables();
+}
+
+RC OrderByPhysicalOperator::copy_current_tuple_as_value_list(Tuple *src_tuple, Tuple *&dest_tuple)
+{
+  if (src_tuple == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  auto *value_list_tuple = new ValueListTuple();
+  RC    rc               = ValueListTuple::make(*src_tuple, *value_list_tuple);
+  if (OB_FAIL(rc)) {
+    delete value_list_tuple;
+    return rc;
+  }
+
+  dest_tuple = value_list_tuple;
+  return RC::SUCCESS;
 }
 
 size_t OrderByPhysicalOperator::estimate_input_rows() const
