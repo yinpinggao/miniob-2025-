@@ -101,6 +101,11 @@ RC ExternalSorter::generate_runs(PhysicalOperator *input)
   }
 
   LOG_INFO("generated %lu run files", run_files_.size());
+  
+  // 重置缓存，因为归并阶段会重新反序列化
+  cached_specs_.clear();
+  specs_cached_ = false;
+  
   return RC::SUCCESS;
 }
 
@@ -242,6 +247,10 @@ RC ExternalSorter::close()
   // 清理临时文件
   temp_file_mgr_.cleanup_all();
   run_files_.clear();
+
+  // 清理缓存的specs
+  cached_specs_.clear();
+  specs_cached_ = false;
 
   sorted_ = false;
   return RC::SUCCESS;
@@ -387,8 +396,4 @@ void ExternalSorter::RunReader::close()
     current_tuple_ = nullptr;
   }
   has_next_ = false;
-  
-  // 清理缓存的specs
-  cached_specs_.clear();
-  specs_cached_ = false;
 }
