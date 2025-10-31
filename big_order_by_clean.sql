@@ -84,6 +84,11 @@ INSERT INTO big_order_by_3 VALUES (139593, 133772, 189473, 38774, 60675, 11676, 
 INSERT INTO big_order_by_3 VALUES (66639, 100908, 77709, 127910, 80911, 84812, 66313, 185114, 66815, 139316, 98517, 168618, 94419, 168820, 59421, 138522, 171123, 44924, 152825, 61426);
 INSERT INTO big_order_by_3 VALUES (23685, 168044, 97045, 57446, 101247, 157948, 146749, 81750, 166151, 46252, 141653, 21854, 160855, 168456, 68057, 76358, 110859, 135260, 187161, 92862);
 SELECT * FROM big_order_by_0, big_order_by_1, big_order_by_2, big_order_by_3 ORDER BY big_order_by_3.i19, big_order_by_0.i18, big_order_by_3.i2, big_order_by_1.i5, big_order_by_0.i0, big_order_by_1.i11, big_order_by_2.i3, big_order_by_1.i18;
+SELECT COUNT(*) FROM big_order_by_0;
+SELECT COUNT(*) FROM big_order_by_1;
+SELECT COUNT(*) FROM big_order_by_2;
+SELECT COUNT(*) FROM big_order_by_3;
+SELECT COUNT(*) FROM big_order_by_0, big_order_by_1, big_order_by_2, big_order_by_3;
 DROP TABLE big_order_by_0;
 DROP TABLE big_order_by_1;
 DROP TABLE big_order_by_2;

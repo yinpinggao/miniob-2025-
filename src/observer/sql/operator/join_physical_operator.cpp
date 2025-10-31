@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "sql/operator/join_physical_operator.h"
+#include "common/log/log.h"
 
 NestedLoopJoinPhysicalOperator::NestedLoopJoinPhysicalOperator() {}
 
@@ -28,9 +29,14 @@ RC NestedLoopJoinPhysicalOperator::open(Trx *trx)
   right_        = children_[1].get();
   right_closed_ = true;
   round_done_   = true;
+  left_tuple_   = nullptr;
+  right_tuple_  = nullptr;
+  joined_tuple_.set_left(nullptr);
+  joined_tuple_.set_right(nullptr);
 
   rc   = left_->open(trx);
   trx_ = trx;
+  LOG_INFO("nested loop join open. this=%p", this);
   return rc;
 }
 

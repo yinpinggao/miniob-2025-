@@ -204,21 +204,15 @@ RC GraceHashJoinPhysicalOperator::partition_input(PhysicalOperator *input, std::
 
 size_t GraceHashJoinPhysicalOperator::hash_tuple(const Tuple *tuple) const
 {
-  // 简单的hash函数：对所有cell的值进行hash
-  std::hash<std::string> hasher;
-  size_t                 hash_value = 0;
-
-  int cell_num = tuple->cell_num();
-  for (int i = 0; i < cell_num; i++) {
-    Value value;
-    RC    rc = tuple->cell_at(i, value);
-    if (rc == RC::SUCCESS) {
-      std::string str = value.to_string();
-      hash_value ^= hasher(str) + 0x9e3779b9 + (hash_value << 6) + (hash_value >> 2);
-    }
-  }
-
-  return hash_value;
+  // 当前的 JOIN 逻辑是通过额外的 Predicate 算子来完成条件过滤，
+  // 这里拿不到真正的等值连接键。如果继续按照整行内容做 hash，
+  // 左右分区的 hash 值通常不同，会导致左右数据落在不同分区，
+  // 最终整个分区 join 过程无法产出结果，从而出现笛卡尔积缺失。
+  //
+  // 为保证正确性，将所有 tuple 固定映射到同一个分区，这样整个
+  // 算子会退化成“分区粒度为 1”的外部嵌套循环：仍然能够利用磁盘
+  // 临时文件限制内存占用，同时避免分区不一致导致结果缺失。
+  return 0;
 }
 
 Tuple *GraceHashJoinPhysicalOperator::flatten_tuple(const Tuple *tuple) const
