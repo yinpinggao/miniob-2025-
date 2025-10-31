@@ -275,7 +275,15 @@ bool ExternalSorter::compare_tuples(const Tuple *t1, const Tuple *t2) const
     }
   }
 
-  return false;  // 相等
+  // 键值完全相同，再比较整行数据确保严格弱序
+  int row_cmp = 0;
+  RC  rc      = t1->compare(*t2, row_cmp);
+  if (rc == RC::SUCCESS && row_cmp != 0) {
+    return row_cmp > 0;
+  }
+
+  // 最后使用指针地址打破平局，避免容器认为完全相等
+  return t1 > t2;
 }
 
 size_t ExternalSorter::estimate_tuple_memory(const Tuple *tuple) const
