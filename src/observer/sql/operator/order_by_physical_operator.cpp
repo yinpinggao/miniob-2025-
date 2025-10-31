@@ -344,24 +344,24 @@ size_t OrderByPhysicalOperator::estimate_tuple_size() const
   TupleSchema schema;
   RC          rc = children_[0]->tuple_schema(schema);
   if (rc == RC::SUCCESS && schema.cell_num() > 0) {
-    const size_t base_overhead = 64;
-    const size_t per_cell      = 24;
+    const size_t base_overhead = 96;
+    const size_t per_cell      = 32;
     size_t       estimate      = base_overhead + per_cell * static_cast<size_t>(schema.cell_num());
     int          join_depth    = calc_join_depth(children_[0].get());
     if (join_depth > 0) {
-      estimate += static_cast<size_t>(join_depth) * 64;
+      estimate += static_cast<size_t>(join_depth) * 128;
     }
-    return std::max<size_t>(estimate, 300);
+    return std::max<size_t>(estimate, static_cast<size_t>(per_cell * schema.cell_num()));
   }
 
   PhysicalOperator *effective_child = unwrap_single_child(children_[0].get());
   PhysicalOperatorType child_type   = effective_child != nullptr ? effective_child->type() : children_[0]->type();
 
   if (child_type == PhysicalOperatorType::NESTED_LOOP_JOIN || child_type == PhysicalOperatorType::GRACE_HASH_JOIN) {
-    return 1000;
+    return 2048;
   }
 
-  return 300;
+  return 512;
 }
 
 size_t OrderByPhysicalOperator::get_sort_memory_threshold() const

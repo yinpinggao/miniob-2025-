@@ -25,7 +25,11 @@
 class ViewScanPhysicalOperator : public PhysicalOperator
 {
 public:
-  ViewScanPhysicalOperator(View *view, std::string alias) : view_(view) { tuple_.set_table_alias(alias); }
+  ViewScanPhysicalOperator(View *view, std::string alias) : view_(view), table_alias_(std::move(alias))
+  {
+    auto alias_copy = table_alias_;
+    tuple_.set_table_alias(alias_copy);
+  }
 
   ~ViewScanPhysicalOperator() override = default;
 
@@ -38,6 +42,7 @@ public:
   RC close() override;
 
   Tuple *current_tuple() override;
+  RC tuple_schema(TupleSchema &schema) const override;
 
   void set_predicates(std::vector<std::unique_ptr<Expression>> &&exprs);
 
@@ -55,5 +60,6 @@ private:
   std::unique_ptr<PhysicalOperator>        select_expr_ = nullptr;
   Record                                   current_record_;
   RowTuple                                 tuple_;
+  std::string                              table_alias_;
   std::vector<std::unique_ptr<Expression>> predicates_;  // TODO chang predicate to table tuple filter
 };

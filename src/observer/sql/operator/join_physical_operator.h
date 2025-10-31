@@ -34,6 +34,7 @@ public:
   RC     next() override;
   RC     close() override;
   Tuple *current_tuple() override;
+  RC     tuple_schema(TupleSchema &schema) const override;
 
 private:
   RC left_next();   //! 左表遍历下一条数据

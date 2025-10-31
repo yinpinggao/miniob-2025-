@@ -32,7 +32,9 @@ public:
 
   TableScanPhysicalOperator(Table *table, std::string alias, ReadWriteMode mode) : table_(table), mode_(mode)
   {
-    tuple_.set_table_alias(alias);
+    table_alias_ = std::move(alias);
+    auto alias_copy = table_alias_;
+    tuple_.set_table_alias(alias_copy);
   }
 
   ~TableScanPhysicalOperator() override = default;
@@ -47,6 +49,8 @@ public:
 
   Tuple *current_tuple() override;
 
+  RC tuple_schema(TupleSchema &schema) const override;
+
   void set_predicates(std::vector<std::unique_ptr<Expression>> &&exprs);
 
 private:
@@ -59,5 +63,6 @@ private:
   RecordFileScanner                        record_scanner_;
   Record                                   current_record_;
   RowTuple                                 tuple_;
+  std::string                              table_alias_;
   std::vector<std::unique_ptr<Expression>> predicates_;  // TODO chang predicate to table tuple filter
 };

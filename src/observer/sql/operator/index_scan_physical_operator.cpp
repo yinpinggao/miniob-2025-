@@ -14,6 +14,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/operator/index_scan_physical_operator.h"
 #include "storage/index/index.h"
+#include "storage/table/table.h"
 #include "storage/trx/trx.h"
 #include <algorithm>
 
@@ -22,32 +23,37 @@ IndexScanPhysicalOperator::IndexScanPhysicalOperator(Table *table, Index *index,
     : table_(table), index_(index), mode_(mode), left_inclusive_(left_inclusive), right_inclusive_(right_inclusive)
 {
   if (left_value) {
-      //new
+    //new
     has_left_value_ = true;
-    left_value_ = *left_value;
-  
+    left_value_     = *left_value;
   }
   if (right_value) {
     //new
-     has_right_value_ = true;
-    right_value_ = *right_value;
+    has_right_value_ = true;
+    right_value_     = *right_value;
   }
 }
 
 IndexScanPhysicalOperator::IndexScanPhysicalOperator(Table *table, std::string table_alias, Index *index,
     ReadWriteMode mode, const Value *left_value, bool left_inclusive, const Value *right_value, bool right_inclusive)
-    : table_(table), index_(index), mode_(mode), left_inclusive_(left_inclusive), right_inclusive_(right_inclusive)
+    : table_(table),
+      index_(index),
+      mode_(mode),
+      table_alias_(std::move(table_alias)),
+      left_inclusive_(left_inclusive),
+      right_inclusive_(right_inclusive)
 {
-  tuple_.set_table_alias(table_alias);
+  auto alias_copy = table_alias_;
+  tuple_.set_table_alias(alias_copy);
   if (left_value) {
     //new
-     has_left_value_ = true;
-    left_value_ = *left_value;
+    has_left_value_ = true;
+    left_value_     = *left_value;
   }
   if (right_value) {
     //new
     has_right_value_ = true;
-    right_value_ = *right_value;
+    right_value_     = *right_value;
   }
 }
 //new
@@ -204,6 +210,34 @@ Tuple *IndexScanPhysicalOperator::current_tuple()
 {
   tuple_.set_record(&current_record_);
   return &tuple_;
+}
+
+RC IndexScanPhysicalOperator::tuple_schema(TupleSchema &schema) const
+{
+  schema = TupleSchema();
+  if (table_ == nullptr) {
+    return RC::INTERNAL;
+  }
+
+  const TableMeta &table_meta = table_->table_meta();
+  const int        sys_fields = table_meta.sys_field_num();
+  const int        field_num  = table_meta.field_num();
+  for (int i = sys_fields; i < field_num; i++) {
+    const FieldMeta *field_meta = table_meta.field(i);
+    if (field_meta == nullptr) {
+      continue;
+    }
+    if (!field_meta->visible()) {
+      continue;
+    }
+    const char *alias = table_alias_.empty() ? nullptr : table_alias_.c_str();
+    schema.append_cell(TupleCellSpec(table_->name(), field_meta->name(), alias));
+  }
+
+  if (schema.cell_num() == 0) {
+    return RC::UNIMPLEMENTED;
+  }
+  return RC::SUCCESS;
 }
 
 void IndexScanPhysicalOperator::set_predicates(std::vector<std::unique_ptr<Expression>> &&exprs)

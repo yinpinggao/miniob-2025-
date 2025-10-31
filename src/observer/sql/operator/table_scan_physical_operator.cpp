@@ -64,6 +64,35 @@ Tuple *TableScanPhysicalOperator::current_tuple()
   return &tuple_;
 }
 
+RC TableScanPhysicalOperator::tuple_schema(TupleSchema &schema) const
+{
+  schema = TupleSchema();
+  if (table_ == nullptr) {
+    return RC::INTERNAL;
+  }
+
+  const TableMeta &table_meta = table_->table_meta();
+  const int        sys_fields = table_meta.sys_field_num();
+  const int        field_num  = table_meta.field_num();
+
+  for (int i = sys_fields; i < field_num; i++) {
+    const FieldMeta *field_meta = table_meta.field(i);
+    if (field_meta == nullptr) {
+      continue;
+    }
+    if (!field_meta->visible()) {
+      continue;
+    }
+    const char *alias = table_alias_.empty() ? nullptr : table_alias_.c_str();
+    schema.append_cell(TupleCellSpec(table_->name(), field_meta->name(), alias));
+  }
+
+  if (schema.cell_num() == 0) {
+    return RC::UNIMPLEMENTED;
+  }
+  return RC::SUCCESS;
+}
+
 string TableScanPhysicalOperator::param() const { return table_->name(); }
 
 void TableScanPhysicalOperator::set_predicates(vector<unique_ptr<Expression>> &&exprs)

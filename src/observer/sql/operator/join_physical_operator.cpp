@@ -93,6 +93,34 @@ Tuple *NestedLoopJoinPhysicalOperator::current_tuple()
   return &joined_tuple_;
 }
 
+RC NestedLoopJoinPhysicalOperator::tuple_schema(TupleSchema &schema) const
+{
+  schema = TupleSchema();
+  if (children_.size() != 2) {
+    return RC::INTERNAL;
+  }
+
+  for (size_t child_idx = 0; child_idx < 2; child_idx++) {
+    TupleSchema child_schema;
+    RC          rc = children_[child_idx]->tuple_schema(child_schema);
+    if (rc == RC::SUCCESS) {
+      const int cell_num = child_schema.cell_num();
+      for (int i = 0; i < cell_num; i++) {
+        schema.append_cell(child_schema.cell_at(i));
+      }
+    } else if (rc == RC::UNIMPLEMENTED) {
+      return RC::UNIMPLEMENTED;
+    } else {
+      return rc;
+    }
+  }
+
+  if (schema.cell_num() == 0) {
+    return RC::UNIMPLEMENTED;
+  }
+  return RC::SUCCESS;
+}
+
 RC NestedLoopJoinPhysicalOperator::left_next()
 {
   RC rc = RC::SUCCESS;

@@ -33,12 +33,13 @@ public:
   GraceHashJoinPhysicalOperator(size_t memory_limit, size_t num_partitions = 16);
   virtual ~GraceHashJoinPhysicalOperator();
 
-  PhysicalOperatorType type() const override { return PhysicalOperatorType::NESTED_LOOP_JOIN; }
+  PhysicalOperatorType type() const override { return PhysicalOperatorType::GRACE_HASH_JOIN; }
 
   RC     open(Trx *trx) override;
   RC     next() override;
   RC     close() override;
   Tuple *current_tuple() override;
+  RC     tuple_schema(TupleSchema &schema) const override;
 
 private:
   /**
@@ -122,4 +123,3 @@ private:
   mutable std::vector<TupleCellSpec> cached_right_specs_;
   mutable bool right_specs_cached_ = false;
 };
-

@@ -44,6 +44,8 @@ public:
 
   Tuple *current_tuple() override;
 
+  RC tuple_schema(TupleSchema &schema) const override;
+
   void set_predicates(std::vector<std::unique_ptr<Expression>> &&exprs);
 
 private:
@@ -60,6 +62,7 @@ private:
 
   Record   current_record_;
   RowTuple tuple_;
+  std::string table_alias_;
 
   Value left_value_;
   Value right_value_;
