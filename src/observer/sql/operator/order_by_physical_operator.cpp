@@ -45,7 +45,7 @@ OrderByPhysicalOperator::OrderByPhysicalOperator(vector<OrderBySqlNode> order_by
     }
 
     // order_line_a == order_line_b
-    return true;
+    return false;
   });
 }
 

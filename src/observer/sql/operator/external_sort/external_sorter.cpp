@@ -293,17 +293,23 @@ Tuple *ExternalSorter::flatten_tuple(const Tuple *tuple) const
 
   int cell_num = tuple->cell_num();
   
-  // 提取所有cell的值
+  // 提取所有cell的值 - 必须进行深拷贝！
+  // 因为RowTuple::cell_at返回的Value可能只是指向record数据的引用(own_data_=false)
+  // 当JOIN操作符重用RowTuple时，这些引用会失效，导致所有tuple显示相同数据
   std::vector<Value> values;
   values.reserve(cell_num);
   for (int i = 0; i < cell_num; i++) {
-    Value value;
-    RC    rc = tuple->cell_at(i, value);
+    Value temp_value;
+    RC    rc = tuple->cell_at(i, temp_value);
     if (rc != RC::SUCCESS) {
       LOG_WARN("failed to get cell at %d from tuple", i);
       return nullptr;
     }
-    values.push_back(value);
+    
+    // 强制深拷贝：使用set_value确保数据被完全复制，拥有独立的内存
+    Value deep_copied_value;
+    deep_copied_value.set_value(temp_value);
+    values.push_back(std::move(deep_copied_value));
   }
 
   // 优化：缓存 TupleCellSpec，避免重复复制
