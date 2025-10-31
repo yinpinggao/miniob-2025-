@@ -20,50 +20,13 @@ See the Mulan PSL v2 for more details. */
 #include <functional>
 #include <algorithm>
 
-OrderByPhysicalOperator::OrderByPhysicalOperator(vector<OrderBySqlNode> order_by) : order_by_(std::move(order_by))
-{
-  order_and_field_line = order_list([this](const order_line &cells_a, const order_line &cells_b) -> bool {
-    auto  order_size   = order_by_.size();
-    auto &order_line_a = cells_a.first;
-    auto &order_line_b = cells_b.first;
-    assert(order_line_a.size() == order_size);
-    assert(order_line_b.size() == order_size);
-    assert(order_by_.size() == order_size);
-
-    for (size_t i = 0; i < order_size; i++) {
-      auto &a      = order_line_a[i];
-      auto &b      = order_line_b[i];
-      auto  result = a.compare(b);
-      auto  is_asc = order_by_[i].is_asc;
-      if (result < 0) {
-        // a < b
-        return !is_asc;
-      } else if (result > 0) {
-        // a > 0
-        return is_asc;
-      }
-    }
-
-    // order_line_a == order_line_b，进一步比较整行，保证严格弱序
-    int row_cmp = 0;
-    if (cells_a.second != nullptr && cells_b.second != nullptr) {
-      RC rc = cells_a.second->compare(*cells_b.second, row_cmp);
-      if (rc == RC::SUCCESS && row_cmp != 0) {
-        return row_cmp > 0;
-      }
-    }
-    // 最后使用指针地址兜底，避免完全相等时返回true
-    return cells_a.second > cells_b.second;
-  });
-}
+OrderByPhysicalOperator::OrderByPhysicalOperator(vector<OrderBySqlNode> order_by) : order_by_(std::move(order_by)) {}
 
 OrderByPhysicalOperator::~OrderByPhysicalOperator()
 {
-  // 清理内存排序的数据
-  while (!order_and_field_line.empty()) {
-    delete order_and_field_line.top().second;
-    order_and_field_line.pop();
-  }
+  sorted_entries_.clear();
+  sorted_pos_       = 0;
+  sequence_counter_ = 0;
   tuple_holder_.reset();
   tuple_ = nullptr;
 }
@@ -72,9 +35,13 @@ RC OrderByPhysicalOperator::fetch_and_sort_tables()
 {
   RC rc = RC::SUCCESS;
 
+  sorted_entries_.clear();
+  sorted_pos_       = 0;
+  sequence_counter_ = 0;
+
   while (RC::SUCCESS == (rc = children_[0]->next())) {
     // 获取 order by 字段的 values
-    vector<Value> order_by_line;
+    std::vector<Value> order_by_line;
     for (auto &[expr, asc] : order_by_) {
       Value cell;
       rc = expr->get_value(*children_[0]->current_tuple(), cell);
@@ -87,11 +54,33 @@ RC OrderByPhysicalOperator::fetch_and_sort_tables()
     Tuple *copied_tuple = nullptr;
     rc                  = copy_current_tuple_as_value_list(children_[0]->current_tuple(), copied_tuple);
     if (OB_FAIL(rc)) {
+      delete copied_tuple;
       return rc;
     }
 
-    order_and_field_line.emplace(order_by_line, copied_tuple);
+    OrderEntry entry;
+    entry.keys      = std::move(order_by_line);
+    entry.tuple     = std::unique_ptr<Tuple>(copied_tuple);
+    entry.sequence  = sequence_counter_++;
+    sorted_entries_.emplace_back(std::move(entry));
   }
+
+  std::stable_sort(sorted_entries_.begin(), sorted_entries_.end(), [this](const OrderEntry &a, const OrderEntry &b) {
+    for (size_t i = 0; i < order_by_.size(); i++) {
+      int cmp = a.keys[i].compare(b.keys[i]);
+      if (cmp != 0) {
+        return order_by_[i].is_asc ? (cmp < 0) : (cmp > 0);
+      }
+    }
+
+    int row_cmp = 0;
+    RC  rc      = a.tuple->compare(*b.tuple, row_cmp);
+    if (rc == RC::SUCCESS && row_cmp != 0) {
+      return row_cmp < 0;
+    }
+
+    return a.sequence < b.sequence;
+  });
 
   return RC::SUCCESS;
 }
@@ -155,16 +144,15 @@ RC OrderByPhysicalOperator::next()
     return rc;
   } else {
     // 使用内存排序
-    if (order_and_field_line.empty()) {
+    if (sorted_pos_ >= sorted_entries_.size()) {
       tuple_holder_.reset();
       tuple_ = nullptr;
       return RC::RECORD_EOF;
     }
 
-    Tuple *next_tuple = order_and_field_line.top().second;
-    order_and_field_line.pop();
-    tuple_holder_.reset(next_tuple);
+    tuple_holder_.reset(sorted_entries_[sorted_pos_].tuple.release());
     tuple_ = tuple_holder_.get();
+    sorted_pos_++;
     return RC::SUCCESS;
   }
 }
@@ -175,12 +163,32 @@ RC OrderByPhysicalOperator::close()
     external_sorter_->close();
     external_sorter_.reset();
   }
+  sorted_entries_.clear();
+  sorted_pos_       = 0;
+  sequence_counter_ = 0;
   tuple_holder_.reset();
   tuple_ = nullptr;
   return children_[0]->close();
 }
 
 Tuple *OrderByPhysicalOperator::current_tuple() { return tuple_; }
+
+RC OrderByPhysicalOperator::copy_current_tuple_as_value_list(Tuple *src_tuple, Tuple *&dest_tuple)
+{
+  if (src_tuple == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  auto *value_list_tuple = new ValueListTuple();
+  RC    rc               = ValueListTuple::make(*src_tuple, *value_list_tuple);
+  if (OB_FAIL(rc)) {
+    delete value_list_tuple;
+    return rc;
+  }
+
+  dest_tuple = value_list_tuple;
+  return RC::SUCCESS;
+}
 
 size_t OrderByPhysicalOperator::get_available_memory() const
 {
@@ -218,23 +226,6 @@ RC OrderByPhysicalOperator::memory_sort_open(Trx *trx)
 {
   // 原有的内存排序逻辑
   return fetch_and_sort_tables();
-}
-
-RC OrderByPhysicalOperator::copy_current_tuple_as_value_list(Tuple *src_tuple, Tuple *&dest_tuple)
-{
-  if (src_tuple == nullptr) {
-    return RC::INVALID_ARGUMENT;
-  }
-
-  auto *value_list_tuple = new ValueListTuple();
-  RC    rc               = ValueListTuple::make(*src_tuple, *value_list_tuple);
-  if (OB_FAIL(rc)) {
-    delete value_list_tuple;
-    return rc;
-  }
-
-  dest_tuple = value_list_tuple;
-  return RC::SUCCESS;
 }
 
 size_t OrderByPhysicalOperator::estimate_input_rows() const

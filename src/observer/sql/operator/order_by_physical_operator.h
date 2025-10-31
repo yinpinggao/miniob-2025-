@@ -16,7 +16,6 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/tuple.h"
 #include "sql/expr/expression_tuple.h"
 #include <functional>
-#include <queue>
 #include <memory>
 
 class ExternalSorter;
@@ -81,12 +80,15 @@ private:
   std::vector<OrderBySqlNode> order_by_;
 
   // 内存排序使用的数据结构
-  using order_line = pair<vector<Value>, Tuple *>;
-  using order_func = std::function<bool(const order_line &, const order_line &)>;
-  using order_list = std::priority_queue<order_line, vector<order_line>, order_func>;
-  order_list order_and_field_line;
-
-  RC copy_current_tuple_as_value_list(Tuple *src_tuple, Tuple *&dest_tuple);
+  struct OrderEntry
+  {
+    std::vector<Value>     keys;
+    std::unique_ptr<Tuple> tuple;
+    size_t                 sequence = 0;
+  };
+  std::vector<OrderEntry> sorted_entries_;
+  size_t                  sorted_pos_       = 0;
+  size_t                  sequence_counter_ = 0;
 
   // 外部排序使用的数据结构
   std::unique_ptr<ExternalSorter> external_sorter_;
@@ -94,4 +96,6 @@ private:
 
   Tuple *tuple_ = nullptr;
   std::unique_ptr<Tuple> tuple_holder_;
+
+  RC copy_current_tuple_as_value_list(Tuple *src_tuple, Tuple *&dest_tuple);
 };
