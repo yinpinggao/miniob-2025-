@@ -769,7 +769,8 @@ BufferPoolManager::BufferPoolManager(int memory_size /* = 0 */)
   if (memory_size <= 0) {
     memory_size = MEM_POOL_ITEM_NUM * DEFAULT_ITEM_NUM_PER_POOL * BP_PAGE_SIZE;
   }
-  const int pool_num = max(memory_size / BP_PAGE_SIZE / DEFAULT_ITEM_NUM_PER_POOL, 1);
+  const int max_pool_num = max(memory_size / BP_PAGE_SIZE / DEFAULT_ITEM_NUM_PER_POOL, 1);
+  const int pool_num = max(2, min(max_pool_num / 10, 10));  // 只预分配10%
   frame_manager_.init(pool_num);
   LOG_INFO("buffer pool manager init with memory size %d, page num: %d, pool num: %d",
            memory_size, pool_num * DEFAULT_ITEM_NUM_PER_POOL, pool_num);
