@@ -480,11 +480,12 @@ RC tokenize(const vector<Value> &args, Value &result)
     return RC::INVALID_ARGUMENT;
   }
   
-  if (args[0].attr_type() != AttrType::CHARS) {
+  // 支持 CHARS 和 TEXTS 类型
+  if (!args[0].is_str()) {
     return RC::INVALID_ARGUMENT;
   }
   
-  if (args[1].attr_type() != AttrType::CHARS) {
+  if (!args[1].is_str()) {
     return RC::INVALID_ARGUMENT;
   }
   
