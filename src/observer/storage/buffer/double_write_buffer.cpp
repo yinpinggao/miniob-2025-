@@ -76,7 +76,9 @@ RC DiskDoubleWriteBuffer::open_file(const char *filename)
 
 RC DiskDoubleWriteBuffer::flush_page()
 {
-  sync();
+  // 移除系统 sync() 调用，避免因磁盘I/O问题导致进程永久卡在D状态
+  // 文件系统会自动管理缓存刷新，不需要强制刷新整个系统的缓存
+  // sync();  // 已移除：这个系统调用会导致整个文件系统同步，可能永久卡住
 
   for (const auto &pair : dblwr_pages_) {
     RC rc = write_page(pair.second);

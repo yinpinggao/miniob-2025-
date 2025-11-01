@@ -258,6 +258,11 @@ RC Db::alter_table(AlterTableStmt &stmt)
       }
     } break;
 
+    case AlterTableStmt::ActionType::ADD_FULLTEXT_INDEX: {
+      const FullTextIndexConfig &config = stmt.fulltext_index_config();
+      rc = table->create_fulltext_index(config.index_name.c_str(), config.column_name.c_str(), config.parser.c_str());
+    } break;
+
     default: {
       rc = RC::UNIMPLEMENTED;
     } break;

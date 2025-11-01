@@ -15,11 +15,13 @@ See the Mulan PSL v2 for more details. */
 #pragma once
 
 #include <unordered_map>
+#include <memory>
 
 #include "storage/table/base_table.h"
 #include "common/types.h"
 #include "common/lang/span.h"
 #include "sql/builtin/builtin.h"
+#include "storage/index/fulltext_index.h"
 
 struct RID;
 class Record;
@@ -86,6 +88,8 @@ public:
   RC create_vector_index(Trx *trx, IndexType index_type, const vector<FieldMeta> &field_meta, const char *index_name,
       NormalFunctionType distance_type, const std::vector<int> &options);
 
+  RC create_fulltext_index(const char *index_name, const char *column_name, const char *parser);
+
   RC get_record_scanner(RecordFileScanner &scanner, Trx *trx, ReadWriteMode mode);
 
   RC get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode mode);
@@ -133,8 +137,10 @@ public:
   Index *find_index(const char *index_name) const;
   Index *find_index_by_field(const char *field_name) const;
   Index *find_vector_index(NormalFunctionType distance_fn, const char *field_name) const;
+  Index *find_fulltext_index(const char *field_name) const;  ///< 查找全文索引
 
 private:
   RecordFileHandler *record_handler_ = nullptr;  /// 记录操作
   vector<Index *>    indexes_;
+  std::unordered_map<std::string, std::unique_ptr<FullTextIndex>> fulltext_indexes_;  ///< 全文索引：字段名 -> 倒排索引
 };

@@ -113,6 +113,11 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     case ExprType::EXPRLIST: {
       return bind_exprlist_expression(expr, bound_expressions);
     } break;
+
+    case ExprType::MATCH_AGAINST: {
+      return bind_match_against_expression(expr, bound_expressions);
+    } break;
+
     default: {
       LOG_WARN("unknown expression type: %d", static_cast<int>(expr->type()));
       return RC::INTERNAL;
@@ -630,6 +635,38 @@ RC ExpressionBinder::bind_exprlist_expression(
       LOG_WARN("invalid children type of LIST expression: %d", child_bound_expressions.size());
       return RC::INVALID_ARGUMENT;
     }
+  }
+
+  bound_expressions.emplace_back(std::move(expr));
+  return rc;
+}
+
+RC ExpressionBinder::bind_match_against_expression(
+    std::unique_ptr<Expression> &expr, std::vector<std::unique_ptr<Expression>> &bound_expressions)
+{
+  RC rc = RC::SUCCESS;
+  auto match_expr = dynamic_cast<MatchAgainstExpr *>(expr.get());
+
+  // 绑定字段表达式
+  vector<unique_ptr<Expression>> field_bound_expressions;
+  rc = bind_expression(match_expr->field_expr(), field_bound_expressions);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  // 绑定搜索表达式
+  vector<unique_ptr<Expression>> search_bound_expressions;
+  rc = bind_expression(match_expr->search_expr(), search_bound_expressions);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  // 更新表达式
+  if (!field_bound_expressions.empty()) {
+    match_expr->field_expr() = std::move(field_bound_expressions[0]);
+  }
+  if (!search_bound_expressions.empty()) {
+    match_expr->search_expr() = std::move(search_bound_expressions[0]);
   }
 
   bound_expressions.emplace_back(std::move(expr));

@@ -69,6 +69,20 @@ RC AlterTableStmt::create(Db *db, const AlterTableSqlNode &alter_table, Stmt *&s
         return RC::INVALID_ARGUMENT;
       }
     } break;
+    case AlterType::ADD_FULLTEXT_INDEX: {
+      if (is_blank(alter_table.fulltext_index_config.index_name.c_str()) ||
+          is_blank(alter_table.fulltext_index_config.column_name.c_str()) ||
+          is_blank(alter_table.fulltext_index_config.parser.c_str())) {
+        LOG_WARN("invalid alter table add fulltext index: index name, column name or parser empty");
+        return RC::INVALID_ARGUMENT;
+      }
+      // Only support jieba parser for now
+      if (alter_table.fulltext_index_config.parser != "jieba") {
+        LOG_WARN("unsupported parser: %s, only jieba is supported", 
+                 alter_table.fulltext_index_config.parser.c_str());
+        return RC::INVALID_ARGUMENT;
+      }
+    } break;
     default: {
       LOG_WARN("unsupported alter table action");
       return RC::UNIMPLEMENTED;

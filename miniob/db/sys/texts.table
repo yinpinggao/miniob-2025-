@@ -1,0 +1,56 @@
+{
+	"fields" : 
+	[
+		{
+			"FIELD_id" : 0,
+			"len" : 5,
+			"mutable" : true,
+			"name" : "id",
+			"nullable" : true,
+			"offset" : 0,
+			"type" : "ints",
+			"visible" : true
+		},
+		{
+			"FIELD_id" : 1,
+			"len" : 65536,
+			"mutable" : true,
+			"name" : "content",
+			"nullable" : true,
+			"offset" : 5,
+			"type" : "texts",
+			"visible" : true
+		}
+	],
+	"indexes" : 
+	[
+		{
+			"fields" : 
+			[
+				{
+					"FIELD_id" : 1,
+					"len" : 65536,
+					"mutable" : true,
+					"name" : "content",
+					"nullable" : true,
+					"offset" : 5,
+					"type" : "texts",
+					"visible" : true
+				}
+			],
+			"fields_offset" : 
+			[
+				0
+			],
+			"fields_total_len" : 65536,
+			"index_type" : 3,
+			"name" : "idx_texts_jieba",
+			"unique" : false
+		}
+	],
+	"storage_format" : 1,
+	"table_id" : 11,
+	"table_mutable" : true,
+	"table_name" : "texts",
+	"table_type" : 1
+}

@@ -37,6 +37,7 @@ enum class NormalFunctionType
   STRING_TO_VECTOR,
   VECTOR_TO_STRING,
   VECTOR_DIM,
+  TOKENIZE,
 };
 
 namespace builtin {
@@ -73,5 +74,7 @@ extern RC string_to_vector(const vector<Value> &args, Value &result);
 extern RC vector_to_string(const vector<Value> &args, Value &result);
 
 extern RC vector_dim(const vector<Value> &args, Value &result);
+
+extern RC tokenize(const vector<Value> &args, Value &result);
 
 };  // namespace builtin

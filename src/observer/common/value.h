@@ -130,7 +130,7 @@ public:
   int                get_vector_length() const;
   float              get_vector_element(int i) const;
   bool               is_null() const { return is_null_; }
-  inline bool        is_str() const { return attr_type_ == AttrType::CHARS; }
+  inline bool        is_str() const { return attr_type_ == AttrType::CHARS || attr_type_ == AttrType::TEXTS; }
 
   static int implicit_cast_cost(AttrType from, AttrType to)
   {

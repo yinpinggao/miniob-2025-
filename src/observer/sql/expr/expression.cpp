@@ -13,8 +13,10 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "sql/expr/expression.h"
+#include "common/fulltext/jieba_util.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/arithmetic_operator.hpp"
+#include <cmath>
 
 #include "sql/stmt/select_stmt.h"
 #include "sql/operator/logical_operator.h"
@@ -963,6 +965,107 @@ RC ExistsExpr::get_value(const Tuple &tuple, Value &value)
   return rc;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// MatchAgainstExpr
+
+MatchAgainstExpr::MatchAgainstExpr(std::unique_ptr<Expression> field_expr, std::unique_ptr<Expression> search_expr)
+    : field_expr_(std::move(field_expr)), search_expr_(std::move(search_expr))
+{}
+
+RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value)
+{
+  // 获取字段值
+  Value field_value;
+  RC rc = field_expr_->get_value(tuple, field_value);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to get field value in MATCH...AGAINST expression");
+    return rc;
+  }
+
+  // 获取搜索字符串
+  Value search_value;
+  rc = search_expr_->get_value(tuple, search_value);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to get search value in MATCH...AGAINST expression");
+    return rc;
+  }
+
+  // 检查类型
+  if (!field_value.is_str() || !search_value.is_str()) {
+    LOG_WARN("MATCH...AGAINST only supports string types");
+    value = Value(0.0f);  // 返回0分
+    return RC::INVALID_ARGUMENT;
+  }
+
+  std::string field_text = field_value.to_string();
+  std::string search_text = search_value.to_string();
+
+  // 对搜索文本进行分词
+  std::vector<std::string> query_tokens;
+  rc = JiebaUtil::instance().tokenize(search_text, query_tokens);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to tokenize search text");
+    value = Value(0.0f);
+    return rc;
+  }
+
+  // 对字段文本进行分词
+  std::vector<std::string> field_tokens;
+  rc = JiebaUtil::instance().tokenize(field_text, field_tokens);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to tokenize field text");
+    value = Value(0.0f);
+    return rc;
+  }
+
+  // 计算BM25分数
+  // 这里使用简化的BM25计算，在实际实现中应该使用全文索引
+  const double k1 = 1.5;
+  const double b = 0.75;
+  
+  double score = 0.0;
+  size_t doc_length = field_tokens.size();
+  double avg_doc_length = doc_length > 0 ? static_cast<double>(doc_length) : 1.0;  // 简化：假设平均文档长度就是当前文档长度
+  
+  // 统计查询词条在字段中的频率
+  for (const std::string &query_term : query_tokens) {
+    if (query_term.empty()) {
+      continue;
+    }
+    
+    int term_freq = 0;
+    for (const std::string &field_term : field_tokens) {
+      if (field_term == query_term) {
+        term_freq++;
+      }
+    }
+    
+    if (term_freq > 0) {
+      // 计算IDF（简化版本：假设文档频率为1）
+      double idf = std::log(1.0 + 1.0);  // log(2) ≈ 0.693
+      
+      // 计算BM25分数
+      double numerator = term_freq * (k1 + 1.0);
+      double denominator = term_freq + k1 * (1.0 - b + b * (static_cast<double>(doc_length) / avg_doc_length));
+      double term_score = numerator / denominator;
+      
+      score += idf * term_score;
+    }
+  }
+  
+  value = Value(static_cast<float>(score));
+  return RC::SUCCESS;
+}
+
+RC MatchAgainstExpr::try_get_value(Value &value) const
+{
+  // MATCH...AGAINST无法在编译时计算，因为需要实际的文档内容
+  return RC::UNIMPLEMENTED;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ListExpr
+
 ListExpr::ListExpr(std::vector<Expression *> &&exprs)
 {
   for (auto expr : exprs) {
@@ -985,6 +1088,7 @@ RC NormalFunctionExpr::type_from_string(const char *type_str, NormalFunctionType
   check_type("string_to_vector", NormalFunctionType::STRING_TO_VECTOR);
   check_type("vector_to_string", NormalFunctionType::VECTOR_TO_STRING);
   check_type("vector_dim", NormalFunctionType::VECTOR_DIM);
+  check_type("tokenize", NormalFunctionType::TOKENIZE);
   return RC::INVALID_ARGUMENT;
 }
 
@@ -1013,6 +1117,7 @@ RC NormalFunctionExpr::get_value(const Tuple &tuple, Value &result)
     case NormalFunctionType::COSINE_DISTANCE: return builtin::cosine_distance(args_values_, result);
     case NormalFunctionType::INNER_PRODUCT: return builtin::inner_product(args_values_, result);
     case NormalFunctionType::TYPEOF: return builtin::_typeof(args_values_, result);
+    case NormalFunctionType::TOKENIZE: return builtin::tokenize(args_values_, result);
   }
   return RC::INTERNAL;
 }
@@ -1042,6 +1147,7 @@ RC NormalFunctionExpr::try_get_value(Value &result) const
     case NormalFunctionType::COSINE_DISTANCE: return builtin::cosine_distance(args_values_, result);
     case NormalFunctionType::INNER_PRODUCT: return builtin::inner_product(args_values_, result);
     case NormalFunctionType::TYPEOF: return builtin::_typeof(args_values_, result);
+    case NormalFunctionType::TOKENIZE: return builtin::tokenize(args_values_, result);
   }
   return RC::INTERNAL;
 }
@@ -1062,6 +1168,7 @@ AttrType NormalFunctionExpr::value_type() const
     case NormalFunctionType::COSINE_DISTANCE: return AttrType::FLOATS;
     case NormalFunctionType::INNER_PRODUCT: return AttrType::FLOATS;
     case NormalFunctionType::TYPEOF: return AttrType::CHARS;
+    case NormalFunctionType::TOKENIZE: return AttrType::CHARS;
   }
   return AttrType::UNDEFINED;
 }

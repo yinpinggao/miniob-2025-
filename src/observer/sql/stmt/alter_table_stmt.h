@@ -25,6 +25,7 @@ public:
   const std::string &new_column_name() const { return alter_info_.new_column_name; }
   const std::string &new_table_name() const { return alter_info_.new_table_name; }
   const std::string &table_name() const { return alter_info_.table_name; }
+  const FullTextIndexConfig &fulltext_index_config() const { return alter_info_.fulltext_index_config; }
 
   static RC create(Db *db, const AlterTableSqlNode &alter_table, Stmt *&stmt);
 

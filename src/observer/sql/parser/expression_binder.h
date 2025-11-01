@@ -93,6 +93,8 @@ private:
       std::unique_ptr<Expression> &expr, std::vector<std::unique_ptr<Expression>> &bound_expressions);
   RC bind_exprlist_expression(
       std::unique_ptr<Expression> &expr, std::vector<std::unique_ptr<Expression>> &bound_expressions);
+  RC bind_match_against_expression(
+      std::unique_ptr<Expression> &expr, std::vector<std::unique_ptr<Expression>> &bound_expressions);
 
   void wildcard_fields(BaseTable *table, std::string table_alias, vector<unique_ptr<Expression>> &expressions,
       bool multi_tables = false);

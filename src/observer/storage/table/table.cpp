@@ -38,10 +38,12 @@ See the Mulan PSL v2 for more details. */
 #include "storage/index/index.h"
 #include "storage/record/record_manager.h"
 #include "storage/table/table.h"
+#include "storage/index/fulltext_index.h"
 #include "storage/trx/trx.h"
 #include "storage/db/db.h"
 #include "storage/index/ivfflat_index.h"
 #include "sql/expr/expression.h"
+#include "sql/parser/parse_defs.h"
 
 namespace fs = std::filesystem;
 
@@ -185,6 +187,9 @@ RC Table::drop()
     return rc;
   }
 
+  // 清理全文索引
+  fulltext_indexes_.clear();
+
   auto       table_name = name();
   error_code ec;
   auto       path = table_meta_file(base_dir_.c_str(), table_name);
@@ -201,12 +206,14 @@ RC Table::drop()
 
   auto index_num = table_meta_.index_num();
   for (int i = 0; i < index_num; ++i) {
-    ((BplusTreeIndex *)indexes_[i])->close();
-    auto index_name = table_meta_.index(i)->name();
-    path            = table_index_file(base_dir_.c_str(), table_name, index_name);
-    if (!filesystem::remove(path, ec)) {
-      LOG_ERROR("Drop table index data fail: %s. error=%s", path.c_str(), strerror(errno));
-      return RC::IOERR_WRITE;
+    if (indexes_[i] != nullptr) {
+      indexes_[i]->close();
+      auto index_name = table_meta_.index(i)->name();
+      path            = table_index_file(base_dir_.c_str(), table_name, index_name);
+      if (!filesystem::remove(path, ec)) {
+        LOG_ERROR("Drop table index data fail: %s. error=%s", path.c_str(), strerror(errno));
+        return RC::IOERR_WRITE;
+      }
     }
   }
 
@@ -1199,6 +1206,164 @@ RC Table::create_vector_index(Trx *trx, IndexType index_type, const vector<Field
   return rc;
 }
 
+RC Table::create_fulltext_index(const char *index_name, const char *column_name, const char *parser)
+{
+  if (common::is_blank(index_name) || common::is_blank(column_name) || common::is_blank(parser)) {
+    LOG_WARN("Invalid input arguments for creating fulltext index");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // Only support jieba parser for now
+  if (strcmp(parser, "jieba") != 0) {
+    LOG_WARN("Unsupported parser: %s, only jieba is supported", parser);
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // Check if column exists
+  const FieldMeta *field_meta = table_meta_.field(column_name);
+  if (field_meta == nullptr) {
+    LOG_WARN("Column %s does not exist in table %s", column_name, name());
+    return RC::SCHEMA_FIELD_NOT_EXIST;
+  }
+
+  // Check if column type is TEXT or CHARS
+  if (field_meta->type() != AttrType::TEXTS && field_meta->type() != AttrType::CHARS) {
+    LOG_WARN("Fulltext index can only be created on TEXT or CHARS column");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // Check if index already exists
+  if (find_index(index_name) != nullptr) {
+    LOG_WARN("Index %s already exists on table %s", index_name, name());
+    return RC::SCHEMA_INDEX_EXIST;
+  }
+
+  // Create index metadata
+  IndexMeta new_index_meta;
+  vector<FieldMeta> field_metas;
+  field_metas.push_back(*field_meta);
+  RC rc = new_index_meta.init(index_name, IndexType::FullTextIndex, field_metas, false);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("Failed to init IndexMeta for fulltext index");
+    return rc;
+  }
+
+  // For now, we'll use B+ tree index to store the fulltext index
+  // This is a simplified implementation - a full implementation would use an inverted index
+  BplusTreeIndex *index = new BplusTreeIndex();
+  string index_file = table_index_file(base_dir_.c_str(), name(), index_name);
+
+  rc = index->create(this, index_file.c_str(), new_index_meta);
+  if (rc != RC::SUCCESS) {
+    delete index;
+    LOG_ERROR("Failed to create fulltext index. file name=%s, rc=%d:%s", index_file.c_str(), rc, strrc(rc));
+    return rc;
+  }
+
+  // Build index from existing records
+  RecordFileScanner scanner;
+  rc = get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
+  if (rc != RC::SUCCESS) {
+    delete index;
+    LOG_WARN("failed to create scanner while creating fulltext index. table=%s, index=%s, rc=%s",
+             name(), index_name, strrc(rc));
+    return rc;
+  }
+
+  // Create fulltext index (inverted index)
+  auto fulltext_idx = std::make_unique<FullTextIndex>();
+  
+  // Build inverted index from existing records
+  Record record;
+  while (OB_SUCC(rc = scanner.next(record))) {
+    // Get the text field value
+    Value field_value;
+    rc = record.get_field(*field_meta, field_value);
+    if (OB_FAIL(rc)) {
+      delete index;
+      LOG_WARN("failed to get field value while building fulltext index. table=%s, index=%s, rc=%s",
+               name(), index_name, strrc(rc));
+      scanner.close_scan();
+      return rc;
+    }
+    
+    if (field_value.is_null()) {
+      continue;  // Skip null values
+    }
+    
+    std::string text = field_value.to_string();
+    
+    // Add document to fulltext index
+    rc = fulltext_idx->add_document(record.rid(), text);
+    if (OB_FAIL(rc)) {
+      delete index;
+      LOG_WARN("failed to add document to fulltext index. table=%s, index=%s, rc=%s",
+               name(), index_name, strrc(rc));
+      scanner.close_scan();
+      return rc;
+    }
+    
+    // Also insert into B+ tree index for metadata
+    rc = index->insert_entry(record.data(), &record.rid());
+    if (rc != RC::SUCCESS) {
+      delete index;
+      LOG_WARN("failed to insert record into index. table=%s, index=%s, rc=%s",
+               name(), index_name, strrc(rc));
+      scanner.close_scan();
+      return rc;
+    }
+  }
+  if (RC::RECORD_EOF == rc) {
+    rc = RC::SUCCESS;
+  } else {
+    delete index;
+    LOG_WARN("failed to build fulltext index. table=%s, index=%s, rc=%s", name(), index_name, strrc(rc));
+    scanner.close_scan();
+    return rc;
+  }
+  scanner.close_scan();
+
+  indexes_.push_back(index);
+  
+  // Store fulltext index
+  fulltext_indexes_[column_name] = std::move(fulltext_idx);
+
+  // Add index to table metadata
+  TableMeta new_table_meta(table_meta_);
+  rc = new_table_meta.add_index(new_index_meta);
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("Failed to add fulltext index (%s) on table (%s). error=%d:%s", index_name, name(), rc, strrc(rc));
+    return rc;
+  }
+
+  // Persist table metadata
+  string tmp_file = table_meta_file(base_dir_.c_str(), name()) + ".tmp";
+  fstream fs;
+  fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
+  if (!fs.is_open()) {
+    LOG_ERROR("Failed to open file for write. file name=%s, errmsg=%s", tmp_file.c_str(), strerror(errno));
+    return RC::IOERR_OPEN;
+  }
+  if (new_table_meta.serialize(fs) < 0) {
+    LOG_ERROR("Failed to dump new table meta to file: %s. sys err=%d:%s", tmp_file.c_str(), errno, strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+  fs.close();
+
+  string meta_file = table_meta_file(base_dir_.c_str(), name());
+  int ret = rename(tmp_file.c_str(), meta_file.c_str());
+  if (ret != 0) {
+    LOG_ERROR("Failed to rename tmp meta file (%s) to normal meta file (%s) while creating fulltext index (%s) on table (%s). "
+              "system error=%d:%s",
+              tmp_file.c_str(), meta_file.c_str(), index_name, name(), errno, strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+
+  table_meta_.swap(new_table_meta);
+
+  LOG_INFO("Successfully created fulltext index (%s) on column (%s) of table (%s)", index_name, column_name, name());
+  return RC::SUCCESS;
+}
 
 RC Table::drop_index(const char *index_name)
 {
@@ -1332,6 +1497,37 @@ RC Table::insert_entry_of_indexes(const char *record, const RID &rid)
       break;
     }
   }
+  
+  // Update fulltext indexes
+  if (OB_SUCC(rc)) {
+    for (auto &pair : fulltext_indexes_) {
+      const std::string &field_name = pair.first;
+      FullTextIndex *fulltext_idx = pair.second.get();
+      
+      const FieldMeta *field_meta = table_meta_.field(field_name.c_str());
+      if (field_meta == nullptr) {
+        continue;
+      }
+      
+      Record rec;
+      rec.set_rid(rid);
+      rec.set_data(const_cast<char *>(record), table_meta_.record_size());
+      
+      Value field_value;
+      rc = rec.get_field(*field_meta, field_value);
+      if (OB_FAIL(rc) || field_value.is_null()) {
+        continue;
+      }
+      
+      std::string text = field_value.to_string();
+      rc = fulltext_idx->add_document(rid, text);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to add document to fulltext index. field=%s, rc=%s", field_name.c_str(), strrc(rc));
+        // Continue with other indexes
+      }
+    }
+  }
+  
   return rc;
 }
 
@@ -1346,6 +1542,21 @@ RC Table::delete_entry_of_indexes(const char *record, const RID &rid, bool error
       }
     }
   }
+  
+  // Update fulltext indexes
+  if (OB_SUCC(rc) || (rc == RC::RECORD_INVALID_KEY && !error_on_not_exists)) {
+    for (auto &pair : fulltext_indexes_) {
+      const std::string &field_name = pair.first;
+      FullTextIndex *fulltext_idx = pair.second.get();
+      
+      rc = fulltext_idx->remove_document(rid);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to remove document from fulltext index. field=%s, rc=%s", field_name.c_str(), strrc(rc));
+        // Continue with other indexes
+      }
+    }
+  }
+  
   return rc;
 }
 
@@ -1382,6 +1593,26 @@ Index *Table::find_vector_index(NormalFunctionType distance_fn, const char *fiel
         auto name = index->index_meta().fields().front().name();
         if (0 == strcmp(name, field_name)) {
           return index;
+        }
+      }
+    }
+  }
+  return nullptr;
+}
+
+Index *Table::find_fulltext_index(const char *field_name) const
+{
+  // Check if fulltext index exists for this field
+  auto it = fulltext_indexes_.find(field_name);
+  if (it != fulltext_indexes_.end()) {
+    // Find the corresponding Index object
+    for (const auto &index : indexes_) {
+      if (index->index_meta().index_type() == IndexType::FullTextIndex) {
+        if (index->index_meta().fields().size() == 1) {
+          auto name = index->index_meta().fields().front().name();
+          if (0 == strcmp(name, field_name)) {
+            return index;
+          }
         }
       }
     }

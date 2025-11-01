@@ -31,6 +31,20 @@ ADD_EXECUTABLE(observer ${MAIN_SRC})
 TARGET_LINK_LIBRARIES(observer observer_static)
 
 ADD_LIBRARY(observer_static STATIC ${LIB_SRC})
+
+# 为 jieba_util.cpp 禁用未使用变量警告（limonp 第三方库有未使用变量）
+SET_SOURCE_FILES_PROPERTIES(
+  ${CMAKE_CURRENT_SOURCE_DIR}/common/fulltext/jieba_util.cpp
+  PROPERTIES COMPILE_FLAGS "-Wno-unused-variable"
+)
+
+# 为 explain_physical_operator.cpp 禁用数组边界和字符串溢出警告（GCC 13 对 std::vector<bool> 的严格检查）
+SET_SOURCE_FILES_PROPERTIES(
+  ${CMAKE_CURRENT_SOURCE_DIR}/sql/operator/explain_physical_operator.cpp
+  PROPERTIES COMPILE_FLAGS "-Wno-array-bounds -Wno-stringop-overflow"
+)
+
+TARGET_INCLUDE_DIRECTORIES(observer_static PRIVATE ${PROJECT_SOURCE_DIR}/deps/3rd/cppjieba/include ${PROJECT_SOURCE_DIR}/deps/3rd/usr/local/include)
 INCLUDE (readline)
 MINIOB_FIND_READLINE()
 IF (HAVE_READLINE)

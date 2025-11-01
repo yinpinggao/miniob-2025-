@@ -54,7 +54,8 @@ enum class ExprType
   NORMAL_FUNCTION,   ///< 普通函数
   SUBQUERY,          ///< 子查询
   EXISTS,            ///< EXISTS子查询
-  EXPRLIST           ///<  列表
+  EXPRLIST,          ///<  列表
+  MATCH_AGAINST      ///< MATCH...AGAINST全文检索表达式
 };
 
 /**
@@ -592,6 +593,32 @@ public:
 private:
   bool                          not_exists_ = false;
   std::unique_ptr<SubQueryExpr> subquery_expr_;
+};
+
+/**
+ * @brief MATCH...AGAINST全文检索表达式
+ * @ingroup Expression
+ */
+class MatchAgainstExpr : public Expression
+{
+public:
+  MatchAgainstExpr(std::unique_ptr<Expression> field_expr, std::unique_ptr<Expression> search_expr);
+  virtual ~MatchAgainstExpr() = default;
+
+  ExprType type() const override { return ExprType::MATCH_AGAINST; }
+
+  RC get_value(const Tuple &tuple, Value &value) override;
+
+  RC try_get_value(Value &value) const override;
+
+  AttrType value_type() const override { return AttrType::FLOATS; }  // BM25分数是浮点数
+
+  std::unique_ptr<Expression> &field_expr() { return field_expr_; }
+  std::unique_ptr<Expression> &search_expr() { return search_expr_; }
+
+private:
+  std::unique_ptr<Expression> field_expr_;   ///< MATCH中的字段表达式
+  std::unique_ptr<Expression> search_expr_;  ///< AGAINST中的搜索字符串表达式
 };
 
 class ListExpr : public Expression

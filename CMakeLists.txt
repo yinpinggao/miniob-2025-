@@ -169,7 +169,7 @@ IF (EXISTS /usr/local/lib64)
     LINK_DIRECTORIES(/usr/local/lib64)
 ENDIF ()
 
-INCLUDE_DIRECTORIES(. ${PROJECT_SOURCE_DIR}/deps /usr/local/include)
+INCLUDE_DIRECTORIES(. ${PROJECT_SOURCE_DIR}/deps ${PROJECT_SOURCE_DIR}/deps/3rd/cppjieba/include ${PROJECT_SOURCE_DIR}/deps/3rd/usr/local/include /usr/local/include)
 
 IF (WITH_UNIT_TESTS)
     IF (ENABLE_COVERAGE)

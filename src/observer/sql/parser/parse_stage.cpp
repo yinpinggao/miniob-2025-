@@ -52,7 +52,13 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
     // set error information to event
     rc = RC::SQL_SYNTAX;
     sql_result->set_return_code(rc);
-    sql_result->set_state_string("Failed to parse sql");
+    std::string error_msg = "Failed to parse sql";
+    if (!sql_node->error.error_msg.empty()) {
+      error_msg += ": " + sql_node->error.error_msg;
+      LOG_WARN("SQL parse error at line %d, column %d: %s", 
+               sql_node->error.line, sql_node->error.column, sql_node->error.error_msg.c_str());
+    }
+    sql_result->set_state_string(error_msg);
     return rc;
   }
 

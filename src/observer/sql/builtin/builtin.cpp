@@ -9,6 +9,7 @@ MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 See the Mulan PSL v2 for more details. */
 
 #include "builtin.h"
+#include "common/fulltext/jieba_util.h"
 #include<cmath>
 
 namespace builtin {
@@ -470,6 +471,40 @@ RC vector_dim(const vector<Value> &args, Value &result)
   }
 
   result = Value(value.get_vector_length());
+  return RC::SUCCESS;
+}
+
+RC tokenize(const vector<Value> &args, Value &result)
+{
+  if (args.size() != 2) {
+    return RC::INVALID_ARGUMENT;
+  }
+  
+  if (args[0].attr_type() != AttrType::CHARS) {
+    return RC::INVALID_ARGUMENT;
+  }
+  
+  if (args[1].attr_type() != AttrType::CHARS) {
+    return RC::INVALID_ARGUMENT;
+  }
+  
+  string text = args[0].to_string();
+  string parser = args[1].to_string();
+  
+  // Only support jieba parser for now
+  if (parser != "jieba") {
+    return RC::INVALID_ARGUMENT;
+  }
+  
+  vector<string> tokens;
+  RC rc = JiebaUtil::instance().tokenize(text, tokens);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  
+  // Format tokens as JSON array
+  string json_result = JiebaUtil::format_tokens_as_json(tokens);
+  result = Value(json_result.c_str());
   return RC::SUCCESS;
 }
 

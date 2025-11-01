@@ -265,6 +265,14 @@ enum class AlterType
   DROP_COLUMN,
   CHANGE_COLUMN,
   RENAME_TABLE,
+  ADD_FULLTEXT_INDEX,
+};
+
+struct FullTextIndexConfig
+{
+  std::string index_name;    ///< 全文索引名称
+  std::string column_name;   ///< 列名
+  std::string parser;        ///< 解析器类型，目前只支持 jieba
 };
 
 struct AlterTableSqlNode
@@ -275,13 +283,15 @@ struct AlterTableSqlNode
   std::string   column_name;         ///< DROP/CHANGE 使用
   std::string   new_column_name;     ///< CHANGE 使用
   std::string   new_table_name;      ///< RENAME TABLE 使用
+  FullTextIndexConfig fulltext_index_config;  ///< ADD FULLTEXT INDEX 使用
 };
 
 enum class IndexType
 {
   BPlusTreeIndex,
   VectorIVFFlatIndex,  // 目前就支持以上两种
-  VectorHNSWIndex
+  VectorHNSWIndex,
+  FullTextIndex  // 全文索引
 };
 
 struct VectorIndexConfig

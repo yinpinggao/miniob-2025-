@@ -77,6 +77,14 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, const function<RC(un
       // 它们会在各自的执行阶段处理
     } break;
 
+    case ExprType::MATCH_AGAINST: {
+      auto &match_expr = dynamic_cast<MatchAgainstExpr &>(expr);
+      rc = callback(match_expr.field_expr());
+      if (OB_SUCC(rc)) {
+        rc = callback(match_expr.search_expr());
+      }
+    } break;
+
     case ExprType::NONE:
     case ExprType::STAR:
     case ExprType::UNBOUND_FIELD:

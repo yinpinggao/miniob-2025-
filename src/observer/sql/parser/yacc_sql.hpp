@@ -124,27 +124,32 @@ extern int yydebug;
     WITH = 325,                    /* WITH  */
     STRING_TO_VECTOR = 326,        /* STRING_TO_VECTOR  */
     VECTOR_TO_STRING = 327,        /* VECTOR_TO_STRING  */
-    DISTANCE = 328,                /* DISTANCE  */
-    TYPE = 329,                    /* TYPE  */
-    CHANGE = 330,                  /* CHANGE  */
-    LISTS = 331,                   /* LISTS  */
-    PROBES = 332,                  /* PROBES  */
-    IVFFLAT = 333,                 /* IVFFLAT  */
-    EQ = 334,                      /* EQ  */
-    LT = 335,                      /* LT  */
-    GT = 336,                      /* GT  */
-    LE = 337,                      /* LE  */
-    GE = 338,                      /* GE  */
-    NE = 339,                      /* NE  */
-    LIKE = 340,                    /* LIKE  */
-    IS = 341,                      /* IS  */
-    RENAME = 342,                  /* RENAME  */
-    TO = 343,                      /* TO  */
-    NUMBER = 344,                  /* NUMBER  */
-    FLOAT = 345,                   /* FLOAT  */
-    ID = 346,                      /* ID  */
-    SSS = 347,                     /* SSS  */
-    UMINUS = 348                   /* UMINUS  */
+    TOKENIZE = 328,                /* TOKENIZE  */
+    FULLTEXT = 329,                /* FULLTEXT  */
+    PARSER = 330,                  /* PARSER  */
+    MATCH = 331,                   /* MATCH  */
+    AGAINST = 332,                 /* AGAINST  */
+    DISTANCE = 333,                /* DISTANCE  */
+    TYPE = 334,                    /* TYPE  */
+    CHANGE = 335,                  /* CHANGE  */
+    LISTS = 336,                   /* LISTS  */
+    PROBES = 337,                  /* PROBES  */
+    IVFFLAT = 338,                 /* IVFFLAT  */
+    EQ = 339,                      /* EQ  */
+    LT = 340,                      /* LT  */
+    GT = 341,                      /* GT  */
+    LE = 342,                      /* LE  */
+    GE = 343,                      /* GE  */
+    NE = 344,                      /* NE  */
+    LIKE = 345,                    /* LIKE  */
+    IS = 346,                      /* IS  */
+    RENAME = 347,                  /* RENAME  */
+    TO = 348,                      /* TO  */
+    NUMBER = 349,                  /* NUMBER  */
+    FLOAT = 350,                   /* FLOAT  */
+    ID = 351,                      /* ID  */
+    SSS = 352,                     /* SSS  */
+    UMINUS = 353                   /* UMINUS  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -153,7 +158,7 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 185 "yacc_sql.y"
+#line 190 "yacc_sql.y"
 
   ParsedSqlNode *                            sql_node;
   Value *                                    value;
@@ -186,7 +191,7 @@ union YYSTYPE
   SetOperatorSqlNode *                       set_operator_node;
   std::vector<SetOperatorSqlNode> *          set_operator_list;
 
-#line 190 "yacc_sql.hpp"
+#line 195 "yacc_sql.hpp"
 
 };
 typedef union YYSTYPE YYSTYPE;

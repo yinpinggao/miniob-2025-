@@ -164,6 +164,11 @@ ParsedSqlNode *create_table_sql_node(char *table_name,
         WITH
         STRING_TO_VECTOR
         VECTOR_TO_STRING
+        TOKENIZE
+        FULLTEXT
+        PARSER
+        MATCH
+        AGAINST
         DISTANCE
         TYPE
         CHANGE
@@ -374,7 +379,21 @@ drop_table_stmt:    /*drop table 语句的语法解析树*/
     };
 
 alter_table_stmt:
-      ALTER TABLE ID ADD COLUMN attr_def
+      ALTER TABLE ID ADD FULLTEXT INDEX ID LBRACE ID RBRACE WITH PARSER ID
+    {
+      $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
+      AlterTableSqlNode &alter_table = $$->alter_table;
+      alter_table.table_name         = $3;
+      alter_table.alter_type         = AlterType::ADD_FULLTEXT_INDEX;
+      alter_table.fulltext_index_config.index_name = $7;
+      alter_table.fulltext_index_config.column_name = $9;
+      alter_table.fulltext_index_config.parser = $13;
+      free($3);
+      free($7);
+      free($9);
+      free($13);
+    }
+    | ALTER TABLE ID ADD COLUMN attr_def
     {
       $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
       AlterTableSqlNode &alter_table = $$->alter_table;
@@ -1186,6 +1205,26 @@ func_expr:
     | VECTOR_TO_STRING LBRACE expression_list RBRACE
     {
         $$ = new UnboundFunctionExpr("vector_to_string", std::move(*$3));
+        $$->set_name(token_name(sql_string, &@$));
+    }
+    | TOKENIZE LBRACE expression_list RBRACE
+    {
+        $$ = new UnboundFunctionExpr("tokenize", std::move(*$3));
+        $$->set_name(token_name(sql_string, &@$));
+    }
+    | MATCH LBRACE expression_list RBRACE AGAINST LBRACE expression RBRACE
+    {
+        if ($3 == nullptr || $3->size() != 1) {
+            LOG_WARN("MATCH expects exactly one field expression");
+            if ($3) delete $3;
+            if ($7) delete $7;
+            YYERROR;
+        }
+        std::unique_ptr<Expression> field_expr = std::move($3->front());
+        std::unique_ptr<Expression> search_expr($7);
+        $3->clear();  // 清空vector，避免双重删除
+        delete $3;
+        $$ = new MatchAgainstExpr(std::move(field_expr), std::move(search_expr));
         $$->set_name(token_name(sql_string, &@$));
     }
     ;
