@@ -141,31 +141,9 @@ public:
         }
     }
     
-    void load_stop_words() {
-        std::ifstream ifs(get_dict_path("stop_words.utf8"));
-        if (!ifs.is_open()) {
-            LOG_WARN("Failed to open stop_words file");
-            return;
-        }
-        std::string line;
-        while (std::getline(ifs, line)) {
-            if (!line.empty()) {
-                stop_words_.insert(line);
-            }
-        }
-        ifs.close();
-        LOG_INFO("Loaded %zu stop words", stop_words_.size());
-    }
-    
     void load_stop_words_from_jieba() {
         // cppjieba's extractor already has stop words loaded via default constructor
         LOG_INFO("Using cppjieba's built-in stop words");
-    }
-    
-    bool is_stop_word(const string &word) const {
-        // Use jieba's extractor to check stop words - same as official code
-        auto &stopWords_ = *GET_PRIVATE(cppjieba::KeywordExtractor, &jieba_->extractor, KeywordExtractor, stopWords_);
-        return stopWords_.find(word) != stopWords_.end();
     }
     
     RC tokenize(const string &text, vector<string> &tokens) {
@@ -176,52 +154,17 @@ public:
             return RC::INTERNAL;
         }
         try {
-            vector<string> all_tokens;
-            jieba_->CutForSearch(text, all_tokens);
+            // Use Cut() instead of CutForSearch() - same as official code
+            jieba_->Cut(text, tokens);
             
-            // Step 1: Filter stop words and collect unique tokens in order
-            vector<string> ordered_tokens;
-            std::unordered_set<string> seen;
-            for (const auto &token : all_tokens) {
-                if (!is_stop_word(token) && !token.empty() && seen.find(token) == seen.end()) {
-                    ordered_tokens.push_back(token);
-                    seen.insert(token);
-                }
-            }
-            
-            // Step 2: Remove tokens that are substrings of other tokens
-            // Create a copy sorted by length (descending) for efficient substring checking
-            vector<string> sorted_by_length = ordered_tokens;
-            std::sort(sorted_by_length.begin(), sorted_by_length.end(), 
-                     [](const string &a, const string &b) {
-                         return a.length() > b.length();
-                     });
-            
-            // Find all tokens that should be kept (not substrings of longer tokens)
-            std::unordered_set<string> tokens_to_keep;
-            for (const auto &token : sorted_by_length) {
-                bool is_substring_of_kept = false;
-                // Check if this token is a substring of any already-kept longer token
-                for (const auto &kept_token : tokens_to_keep) {
-                    // Since sorted_by_length is sorted by length descending,
-                    // kept_token is always >= token in length
-                    if (kept_token.length() > token.length() && 
-                        kept_token.find(token) != string::npos) {
-                        is_substring_of_kept = true;
-                        break;
-                    }
-                }
-                if (!is_substring_of_kept) {
-                    tokens_to_keep.insert(token);
-                }
-            }
-            
-            // Step 3: Output in original order, only keeping selected tokens
-            for (const auto &token : ordered_tokens) {
-                if (tokens_to_keep.find(token) != tokens_to_keep.end()) {
-                    tokens.push_back(token);
-                }
-            }
+            // Remove stop words - same as official code
+            auto &stopWords_ = *GET_PRIVATE(cppjieba::KeywordExtractor, &jieba_->extractor, KeywordExtractor, stopWords_);
+            tokens.erase(std::remove_if(tokens.begin(),
+                                        tokens.end(),
+                                        [&stopWords_](const std::string &word) { 
+                                            return stopWords_.find(word) != stopWords_.end(); 
+                                        }),
+                        tokens.end());
             
             return RC::SUCCESS;
         } catch (const std::exception &e) {
@@ -232,7 +175,6 @@ public:
 private:
     cppjieba::Jieba *jieba_ = nullptr;
     bool initialized_ = false;
-    std::unordered_set<string> stop_words_;  // Stop words set
 };
 
 JiebaUtil::JiebaUtil() : impl_(new Impl()) {}
