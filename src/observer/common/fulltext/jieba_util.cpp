@@ -19,6 +19,9 @@ static string get_dict_path(const char* filename) {
     
     // Priority 2: Try standard installation paths (as per official build.sh)
     const char* possible_paths[] = {
+        "deps/3rd/cppjieba/dict/",                       // From project root (for test platform)
+        "deps/3rd/usr/local/dict/",                      // From project root (install location)
+        "deps/3rd/usr/local/share/cppjieba/dict/",       // From project root (actual install)
         "../dict/",                                      // Relative to bin/ (created by build.sh)
         "../../deps/3rd/usr/local/dict/",               // Standard install location (symlink)
         "../../deps/3rd/usr/local/share/cppjieba/dict/", // Standard install location (actual)
