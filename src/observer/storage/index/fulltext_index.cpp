@@ -172,12 +172,55 @@ double FullTextIndex::calculate_bm25(const std::vector<std::string> &query_token
   size_t total_docs = doc_stats_.size();
   double avg_doc_length = average_document_length();
   
+  // BM25Okapi with epsilon handling for negative IDF
+  // 参考: https://github.com/dorianbrown/rank_bm25
+  const double epsilon = 0.25;  // 与rank_bm25库一致
+  
+  // 第一步：计算所有查询词的原始IDF和average_idf
+  std::unordered_map<std::string, double> idf_map;
+  double idf_sum = 0.0;
+  int idf_count = 0;
+  
+  for (const std::string &term : query_tokens) {
+    if (idf_map.find(term) != idf_map.end()) {
+      continue;  // 已经计算过该词的IDF
+    }
+    
+    auto index_it = inverted_index_.find(term);
+    if (index_it == inverted_index_.end()) {
+      continue;  // 词条不存在于任何文档中
+    }
+    
+    size_t doc_freq = index_it->second.size();
+    double idf = calculate_idf(term, doc_freq, total_docs);
+    idf_map[term] = idf;
+    idf_sum += idf;
+    idf_count++;
+  }
+  
+  // 计算average_idf
+  double average_idf = (idf_count > 0) ? (idf_sum / idf_count) : 0.0;
+  double eps = epsilon * average_idf;
+  
+  // 第二步：将负IDF替换为 epsilon * average_idf
+  for (auto &pair : idf_map) {
+    if (pair.second < 0) {
+      pair.second = eps;
+    }
+  }
+  
+  // 第三步：计算最终BM25分数
   double score = 0.0;
   
   for (const std::string &term : query_tokens) {
+    auto idf_it = idf_map.find(term);
+    if (idf_it == idf_map.end()) {
+      continue;  // 词条不存在
+    }
+    
     auto index_it = inverted_index_.find(term);
     if (index_it == inverted_index_.end()) {
-      continue;  // 词条不存在，跳过
+      continue;
     }
     
     const PostingList &posting_list = index_it->second;
@@ -193,10 +236,7 @@ double FullTextIndex::calculate_bm25(const std::vector<std::string> &query_token
     }
     
     int term_freq = entry_it->term_freq;
-    size_t doc_freq = posting_list.size();  // 包含该词条的文档数量
-    
-    // 计算IDF
-    double idf = calculate_idf(term, doc_freq, total_docs);
+    double idf = idf_it->second;  // 使用处理后的IDF
     
     // 计算BM25分数（单个词条）
     double term_score = calculate_term_bm25(term, doc_rid, term_freq, doc_length, avg_doc_length);

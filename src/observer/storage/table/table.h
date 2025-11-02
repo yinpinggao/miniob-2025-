@@ -138,6 +138,7 @@ public:
   Index *find_index_by_field(const char *field_name) const;
   Index *find_vector_index(NormalFunctionType distance_fn, const char *field_name) const;
   Index *find_fulltext_index(const char *field_name) const;  ///< 查找全文索引
+  FullTextIndex *get_fulltext_index(const char *field_name) const;  ///< 获取全文索引对象
 
 private:
   RecordFileHandler *record_handler_ = nullptr;  /// 记录操作

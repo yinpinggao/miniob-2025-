@@ -16,6 +16,9 @@ See the Mulan PSL v2 for more details. */
 #include "common/fulltext/jieba_util.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/arithmetic_operator.hpp"
+#include "storage/table/table.h"
+#include "storage/index/fulltext_index.h"
+#include "storage/record/record.h"
 #include <cmath>
 
 #include "sql/stmt/select_stmt.h"
@@ -974,30 +977,21 @@ MatchAgainstExpr::MatchAgainstExpr(std::unique_ptr<Expression> field_expr, std::
 
 RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value)
 {
-  // 获取字段值
-  Value field_value;
-  RC rc = field_expr_->get_value(tuple, field_value);
-  if (OB_FAIL(rc)) {
-    LOG_WARN("failed to get field value in MATCH...AGAINST expression");
-    return rc;
-  }
-
   // 获取搜索字符串
   Value search_value;
-  rc = search_expr_->get_value(tuple, search_value);
+  RC rc = search_expr_->get_value(tuple, search_value);
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to get search value in MATCH...AGAINST expression");
     return rc;
   }
 
-  // 检查类型
-  if (!field_value.is_str() || !search_value.is_str()) {
-    LOG_WARN("MATCH...AGAINST only supports string types");
-    value = Value(0.0f);  // 返回0分
+  // 检查搜索字符串类型
+  if (!search_value.is_str()) {
+    LOG_WARN("MATCH...AGAINST search text must be string type");
+    value = Value(0.0f);
     return RC::INVALID_ARGUMENT;
   }
 
-  std::string field_text = field_value.to_string();
   std::string search_text = search_value.to_string();
 
   // 对搜索文本进行分词
@@ -1009,6 +1003,55 @@ RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value)
     return rc;
   }
 
+  // 尝试获取表和RID，使用全文索引计算BM25
+  // 首先检查 field_expr_ 是否是 FieldExpr 类型
+  if (field_expr_->type() == ExprType::FIELD) {
+    FieldExpr *field_expr = static_cast<FieldExpr *>(field_expr_.get());
+    const Field &field = field_expr->field();
+    const char *field_name = field.field_name();
+    BaseTable *base_table = const_cast<BaseTable *>(field.table());
+    
+    // 尝试将 BaseTable 转换为 Table
+    Table *table = dynamic_cast<Table *>(base_table);
+    if (table != nullptr) {
+      // 尝试获取 RID，检查 tuple 是否是 RowTuple
+      const RowTuple *row_tuple = dynamic_cast<const RowTuple *>(&tuple);
+      if (row_tuple != nullptr) {
+        const Record &record = row_tuple->record();
+        RID rid = record.rid();
+        
+        // 获取全文索引
+        FullTextIndex *ft_idx = table->get_fulltext_index(field_name);
+        if (ft_idx != nullptr) {
+          // 使用全文索引计算BM25分数
+          double score = ft_idx->calculate_bm25(query_tokens, rid);
+          value = Value(static_cast<float>(score));
+          return RC::SUCCESS;
+        }
+      }
+    }
+  }
+  
+  // 如果无法使用全文索引（例如 tuple 不是 RowTuple，或者没有全文索引）
+  // 则回退到简化的BM25计算（这是为了兼容性，但不应该发生在有全文索引的情况下）
+  
+  // 获取字段值
+  Value field_value;
+  rc = field_expr_->get_value(tuple, field_value);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to get field value in MATCH...AGAINST expression");
+    return rc;
+  }
+
+  // 检查类型
+  if (!field_value.is_str()) {
+    LOG_WARN("MATCH...AGAINST only supports string types");
+    value = Value(0.0f);
+    return RC::INVALID_ARGUMENT;
+  }
+
+  std::string field_text = field_value.to_string();
+
   // 对字段文本进行分词
   std::vector<std::string> field_tokens;
   rc = JiebaUtil::instance().tokenize(field_text, field_tokens);
@@ -1018,18 +1061,15 @@ RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value)
     return rc;
   }
 
-  // 计算BM25分数
-  // 这里使用简化的BM25计算，在实际实现中应该使用全文索引
+  // 计算简化的BM25分数（回退方案，不应该在生产环境使用）
+  LOG_WARN("Using fallback BM25 calculation without fulltext index");
   const double k1 = 1.5;
   const double b = 0.75;
   
   double score = 0.0;
   size_t doc_length = field_tokens.size();
-  // 使用固定的平均文档长度估计值（20个词）
-  // 这样可以让文档长度影响分数
-  const double avg_doc_length = 20.0;
+  const double avg_doc_length = 20.0;  // 估计值
   
-  // 统计查询词条在字段中的频率
   for (const std::string &query_term : query_tokens) {
     if (query_term.empty()) {
       continue;
@@ -1043,15 +1083,10 @@ RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value)
     }
     
     if (term_freq > 0) {
-      // 计算IDF（简化版本：使用固定值）
-      // 使用 log(2) ≈ 0.693，这是一个中等选择性的IDF值
-      double idf = std::log(2.0);
-      
-      // 计算BM25分数
+      double idf = std::log(2.0);  // 固定IDF值
       double numerator = term_freq * (k1 + 1.0);
       double denominator = term_freq + k1 * (1.0 - b + b * (static_cast<double>(doc_length) / avg_doc_length));
       double term_score = numerator / denominator;
-      
       score += idf * term_score;
     }
   }

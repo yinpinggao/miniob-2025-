@@ -1620,6 +1620,15 @@ Index *Table::find_fulltext_index(const char *field_name) const
   return nullptr;
 }
 
+FullTextIndex *Table::get_fulltext_index(const char *field_name) const
+{
+  auto it = fulltext_indexes_.find(field_name);
+  if (it != fulltext_indexes_.end()) {
+    return it->second.get();
+  }
+  return nullptr;
+}
+
 RC Table::sync()
 {
   RC rc = RC::SUCCESS;
