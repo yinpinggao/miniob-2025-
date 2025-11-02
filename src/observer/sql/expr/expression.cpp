@@ -1025,7 +1025,9 @@ RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value)
   
   double score = 0.0;
   size_t doc_length = field_tokens.size();
-  double avg_doc_length = doc_length > 0 ? static_cast<double>(doc_length) : 1.0;  // 简化：假设平均文档长度就是当前文档长度
+  // 使用固定的平均文档长度估计值（20个词）
+  // 这样可以让文档长度影响分数
+  const double avg_doc_length = 20.0;
   
   // 统计查询词条在字段中的频率
   for (const std::string &query_term : query_tokens) {
@@ -1041,8 +1043,9 @@ RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value)
     }
     
     if (term_freq > 0) {
-      // 计算IDF（简化版本：假设文档频率为1）
-      double idf = std::log(1.0 + 1.0);  // log(2) ≈ 0.693
+      // 计算IDF（简化版本：使用固定值）
+      // 使用 log(2) ≈ 0.693，这是一个中等选择性的IDF值
+      double idf = std::log(2.0);
       
       // 计算BM25分数
       double numerator = term_freq * (k1 + 1.0);
