@@ -7,6 +7,22 @@
 #include <unordered_set>
 #include <unistd.h>
 #include <fcntl.h>
+#include <limits.h>
+
+// Get the directory where the executable is located
+static string get_executable_dir() {
+    char path[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len != -1) {
+        path[len] = '\0';
+        string exe_path(path);
+        size_t last_slash = exe_path.find_last_of('/');
+        if (last_slash != string::npos) {
+            return exe_path.substr(0, last_slash);
+        }
+    }
+    return "";
+}
 
 static string get_dict_path(const char* filename) {
     // Priority 1: Environment variable
@@ -17,20 +33,39 @@ static string get_dict_path(const char* filename) {
         if (test_file.good()) return path;
     }
     
-    // Priority 2: Try standard installation paths (as per official build.sh)
+    // Priority 2: Try paths relative to executable location
+    string exe_dir = get_executable_dir();
+    if (!exe_dir.empty()) {
+        const char* exe_relative_paths[] = {
+            "/../dict/",                                      // Relative to bin/
+            "/../../deps/3rd/usr/local/dict/",               // Standard install location
+            "/../../deps/3rd/usr/local/share/cppjieba/dict/",
+            "/../../deps/3rd/cppjieba/dict/",                // Source location
+            NULL
+        };
+        for (int i = 0; exe_relative_paths[i] != NULL; i++) {
+            string test_path = exe_dir + exe_relative_paths[i] + "jieba.dict.utf8";
+            std::ifstream test_file(test_path);
+            if (test_file.good()) {
+                return exe_dir + exe_relative_paths[i] + filename;
+            }
+        }
+    }
+    
+    // Priority 3: Try standard paths relative to current directory
     const char* possible_paths[] = {
-        "deps/3rd/cppjieba/dict/",                       // From project root (for test platform)
-        "deps/3rd/usr/local/dict/",                      // From project root (install location)
+        "deps/3rd/usr/local/dict/",                      // From project root - OFFICIAL STANDARD PATH
         "deps/3rd/usr/local/share/cppjieba/dict/",       // From project root (actual install)
+        "deps/3rd/cppjieba/dict/",                       // From project root (source location)
         "../dict/",                                      // Relative to bin/ (created by build.sh)
-        "../../deps/3rd/usr/local/dict/",               // Standard install location (symlink)
-        "../../deps/3rd/usr/local/share/cppjieba/dict/", // Standard install location (actual)
-        "../../deps/3rd/cppjieba/dict/",                // Source location
-        "../../../deps/3rd/usr/local/dict/",            // From deeper bin directory
+        "../../deps/3rd/usr/local/dict/",               // From bin/ - standard install
+        "../../deps/3rd/usr/local/share/cppjieba/dict/",
+        "../../deps/3rd/cppjieba/dict/",
+        "../../../deps/3rd/usr/local/dict/",
         "../../../deps/3rd/usr/local/share/cppjieba/dict/",
         "../../../deps/3rd/cppjieba/dict/",
-        "./dict/",                                       // Current directory
-        "/root/miniob/deps/3rd/cppjieba/dict/",         // Fallback absolute path
+        "./dict/",
+        "/root/miniob/deps/3rd/cppjieba/dict/",
         NULL
     };
     
