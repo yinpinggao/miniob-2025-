@@ -139,3 +139,5 @@ WHERE MATCH(content) AGAINST('你好') > 0
 ORDER BY MATCH(content) AGAINST('你好') DESC, id ASC;
 
 
+
+
