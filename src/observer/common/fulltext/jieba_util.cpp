@@ -85,46 +85,10 @@ static string get_dict_path(const char* filename) {
 class JiebaUtil::Impl {
 public:
     Impl() {
-        // Verify all dictionary files exist before initializing
-        const char* dict_files[] = {
-            "jieba.dict.utf8",
-            "hmm_model.utf8",
-            "user.dict.utf8",
-            "idf.utf8",
-            "stop_words.utf8",
-            NULL
-        };
-        
-        bool all_dicts_exist = true;
-        for (int i = 0; dict_files[i] != NULL; i++) {
-            string dict_path = get_dict_path(dict_files[i]);
-            std::ifstream test_file(dict_path);
-            if (!test_file.good()) {
-                LOG_ERROR("Dictionary file not found: %s", dict_path.c_str());
-                all_dicts_exist = false;
-            }
-        }
-        
-        if (!all_dicts_exist) {
-            LOG_ERROR("Not all dictionary files found, Jieba initialization failed");
-            jieba_ = nullptr;
-            initialized_ = false;
-            return;
-        }
-        
         try {
-            string jieba_dict = get_dict_path("jieba.dict.utf8");
-            string hmm_model = get_dict_path("hmm_model.utf8");
-            string user_dict = get_dict_path("user.dict.utf8");
-            string idf_dict = get_dict_path("idf.utf8");
-            string stop_words = get_dict_path("stop_words.utf8");
-            
-            LOG_INFO("Initializing Jieba with dicts:");
-            LOG_INFO("  jieba.dict: %s", jieba_dict.c_str());
-            LOG_INFO("  hmm_model: %s", hmm_model.c_str());
-            LOG_INFO("  user.dict: %s", user_dict.c_str());
-            LOG_INFO("  idf: %s", idf_dict.c_str());
-            LOG_INFO("  stop_words: %s", stop_words.c_str());
+            // Use default constructor - let cppjieba find dicts using __FILE__ mechanism
+            // This is the same approach as official miniob code
+            LOG_INFO("Initializing Jieba with default constructor (__FILE__ mechanism)");
             
             // Redirect stderr to suppress limonp errors that cause abort()
             int old_stderr = dup(STDERR_FILENO);
@@ -134,8 +98,8 @@ public:
                 close(null_fd);
             }
             
-            // Initialize Jieba (may trigger abort() in limonp)
-            jieba_ = new cppjieba::Jieba(jieba_dict, hmm_model, user_dict, idf_dict, stop_words);
+            // Initialize Jieba with default constructor (uses __FILE__ to locate dicts)
+            jieba_ = new cppjieba::Jieba();
             
             // Restore stderr
             if (old_stderr >= 0) {
@@ -146,8 +110,8 @@ public:
             LOG_INFO("Jieba initialized successfully");
             initialized_ = true;
             
-            // Load stop words
-            load_stop_words();
+            // Load stop words from cppjieba's extractor
+            load_stop_words_from_jieba();
         } catch (const std::exception &e) {
             LOG_ERROR("Failed to initialize Jieba: %s", e.what());
             if (jieba_) {
@@ -188,6 +152,12 @@ public:
         }
         ifs.close();
         LOG_INFO("Loaded %zu stop words", stop_words_.size());
+    }
+    
+    void load_stop_words_from_jieba() {
+        // cppjieba's extractor already has stop words loaded, we can use them directly
+        // For now, still use our own stop words file for consistency
+        load_stop_words();
     }
     
     bool is_stop_word(const string &word) const {
