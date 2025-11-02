@@ -1,6 +1,7 @@
 #include "common/fulltext/jieba_util.h"
 #include "common/log/log.h"
 #include "cppjieba/Jieba.hpp"
+#include "common/utils/private_accessor.h"
 #include <sstream>
 #include <cstdlib>
 #include <fstream>
@@ -8,6 +9,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <limits.h>
+
+IMPLEMENT_GET_PRIVATE_VAR(KeywordExtractor, cppjieba::KeywordExtractor, stopWords_, std::unordered_set<std::string>)
 
 // Get the directory where the executable is located
 static string get_executable_dir() {
@@ -155,13 +158,14 @@ public:
     }
     
     void load_stop_words_from_jieba() {
-        // cppjieba's extractor already has stop words loaded, we can use them directly
-        // For now, still use our own stop words file for consistency
-        load_stop_words();
+        // cppjieba's extractor already has stop words loaded via default constructor
+        LOG_INFO("Using cppjieba's built-in stop words");
     }
     
     bool is_stop_word(const string &word) const {
-        return stop_words_.find(word) != stop_words_.end();
+        // Use jieba's extractor to check stop words - same as official code
+        auto &stopWords_ = *GET_PRIVATE(cppjieba::KeywordExtractor, &jieba_->extractor, KeywordExtractor, stopWords_);
+        return stopWords_.find(word) != stopWords_.end();
     }
     
     RC tokenize(const string &text, vector<string> &tokens) {
