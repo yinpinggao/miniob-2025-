@@ -136,6 +136,8 @@ private:
   InvertedIndex inverted_index_;  ///< 倒排索引
   std::unordered_map<RID, DocumentStats, RIDHash> doc_stats_;  ///< 文档统计信息
   size_t total_tokens_;  ///< 所有文档的词条总数
+  mutable double average_idf_;  ///< 所有词条的平均IDF（用于epsilon处理）
+  mutable bool average_idf_cached_;  ///< average_idf_是否已缓存
   
   /**
    * @brief 计算逆文档频率（IDF）
@@ -147,7 +149,13 @@ private:
    */
   double calculate_term_bm25(const std::string &term, const RID &doc_rid, 
                             int term_freq, int doc_length, double avg_doc_length) const;
+  
+  /**
+   * @brief 计算所有词条的平均IDF（用于epsilon处理）
+   */
+  double calculate_average_idf() const;
 };
+
 
 
 

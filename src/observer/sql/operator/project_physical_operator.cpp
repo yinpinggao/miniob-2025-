@@ -58,8 +58,10 @@ RC ProjectPhysicalOperator::close()
 Tuple *ProjectPhysicalOperator::current_tuple()
 {
   auto tuple = children_[0]->current_tuple();
-  tuple_.set_base_rids(tuple->base_rids());
   tuple_.set_tuple(tuple);
+  // 虽然 ExpressionTuple 会从 child_tuple_ 获取 base_rids，
+  // 但为了确保兼容性，仍然显式设置一次
+  tuple_.set_base_rids(tuple->base_rids());
   return &tuple_;
 }
 

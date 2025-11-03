@@ -14,7 +14,7 @@ See the Mulan PSL v2 for more details. */
 #include <algorithm>
 #include <cmath>
 
-FullTextIndex::FullTextIndex() : total_tokens_(0) {}
+FullTextIndex::FullTextIndex() : total_tokens_(0), average_idf_(0.0), average_idf_cached_(false) {}
 
 RC FullTextIndex::add_document(const RID &doc_rid, const std::string &text, const std::vector<std::string> *tokens)
 {
@@ -70,6 +70,9 @@ RC FullTextIndex::add_document(const RID &doc_rid, const std::string &text, cons
   doc_stats_[doc_rid] = DocumentStats(doc_rid, doc_length);
   total_tokens_ += doc_length;
   
+  // 索引发生变化，使 average_idf 缓存失效
+  average_idf_cached_ = false;
+  
   return RC::SUCCESS;
 }
 
@@ -99,6 +102,9 @@ RC FullTextIndex::remove_document(const RID &doc_rid)
   // 删除文档统计信息
   doc_stats_.erase(doc_it);
   total_tokens_ -= doc_length;
+  
+  // 索引发生变化，使 average_idf 缓存失效
+  average_idf_cached_ = false;
   
   return RC::SUCCESS;
 }
@@ -176,10 +182,15 @@ double FullTextIndex::calculate_bm25(const std::vector<std::string> &query_token
   // 参考: https://github.com/dorianbrown/rank_bm25
   const double epsilon = 0.25;  // 与rank_bm25库一致
   
-  // 第一步：计算所有查询词的原始IDF和average_idf
+  // 第一步：获取或计算 average_idf（基于所有词条，而不是只查询词）
+  if (!average_idf_cached_) {
+    average_idf_ = calculate_average_idf();
+    average_idf_cached_ = true;
+  }
+  double eps = epsilon * average_idf_;
+  
+  // 第二步：计算查询词的IDF并应用epsilon处理
   std::unordered_map<std::string, double> idf_map;
-  double idf_sum = 0.0;
-  int idf_count = 0;
   
   for (const std::string &term : query_tokens) {
     if (idf_map.find(term) != idf_map.end()) {
@@ -193,20 +204,13 @@ double FullTextIndex::calculate_bm25(const std::vector<std::string> &query_token
     
     size_t doc_freq = index_it->second.size();
     double idf = calculate_idf(term, doc_freq, total_docs);
-    idf_map[term] = idf;
-    idf_sum += idf;
-    idf_count++;
-  }
-  
-  // 计算average_idf
-  double average_idf = (idf_count > 0) ? (idf_sum / idf_count) : 0.0;
-  double eps = epsilon * average_idf;
-  
-  // 第二步：将负IDF替换为 epsilon * average_idf
-  for (auto &pair : idf_map) {
-    if (pair.second < 0) {
-      pair.second = eps;
+    
+    // 应用epsilon处理：如果IDF < 0，替换为 eps
+    if (idf < 0) {
+      idf = eps;
     }
+    
+    idf_map[term] = idf;
   }
   
   // 第三步：计算最终BM25分数
@@ -313,6 +317,7 @@ void FullTextIndex::clear()
   inverted_index_.clear();
   doc_stats_.clear();
   total_tokens_ = 0;
+  average_idf_cached_ = false;
 }
 
 double FullTextIndex::calculate_idf(const std::string &term, size_t doc_freq, size_t total_docs) const
@@ -346,5 +351,25 @@ double FullTextIndex::calculate_term_bm25(const std::string &term, const RID &do
   }
   
   return numerator / denominator;
+}
+
+double FullTextIndex::calculate_average_idf() const
+{
+  if (inverted_index_.empty() || doc_stats_.empty()) {
+    return 0.0;
+  }
+  
+  size_t total_docs = doc_stats_.size();
+  double idf_sum = 0.0;
+  
+  // 遍历所有词条，计算所有词的IDF之和（与rank_bm25一致）
+  for (const auto &pair : inverted_index_) {
+    const std::string &term = pair.first;
+    size_t doc_freq = pair.second.size();
+    double idf = calculate_idf(term, doc_freq, total_docs);
+    idf_sum += idf;
+  }
+  
+  return idf_sum / inverted_index_.size();
 }
 

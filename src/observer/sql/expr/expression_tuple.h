@@ -19,6 +19,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/tuple.h"
 #include "common/value.h"
 #include "common/rc.h"
+#include "common/log/log.h"
 
 template <typename ExprPointerType>
 class ExpressionTuple : public Tuple
@@ -94,6 +95,13 @@ private:
       copy->child_tuple_ = child_tuple_->copy();
     }
     return copy;
+  }
+
+  // 重写 base_rids()，直接返回基类的 base_rids_
+  // 不从 child_tuple_ 获取，而是由 ProjectPhysicalOperator 通过 set_base_rids 设置
+  std::vector<std::pair<BaseTable *, RID>> &base_rids() override
+  {
+    return Tuple::base_rids();
   }
 
 private:

@@ -203,6 +203,9 @@ RC OrderByPhysicalOperator::copy_current_tuple_as_value_list(Tuple *src_tuple, T
     return rc;
   }
 
+  // 复制 base_rids，以便后续的 MATCH...AGAINST 表达式能获取到 RID
+  value_list_tuple->set_base_rids(src_tuple->base_rids());
+
   dest_tuple = value_list_tuple;
   return RC::SUCCESS;
 }

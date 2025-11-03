@@ -1005,94 +1005,106 @@ RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value)
 
   // 尝试获取表和RID，使用全文索引计算BM25
   // 首先检查 field_expr_ 是否是 FieldExpr 类型
+  LOG_DEBUG("MatchAgainstExpr: field_expr type = %d", static_cast<int>(field_expr_->type()));
+  
   if (field_expr_->type() == ExprType::FIELD) {
     FieldExpr *field_expr = static_cast<FieldExpr *>(field_expr_.get());
     const Field &field = field_expr->field();
     const char *field_name = field.field_name();
     BaseTable *base_table = const_cast<BaseTable *>(field.table());
     
+    LOG_DEBUG("MatchAgainstExpr: field_name = '%s', base_table = %p", field_name, base_table);
+    
     // 尝试将 BaseTable 转换为 Table
     Table *table = dynamic_cast<Table *>(base_table);
+    LOG_DEBUG("MatchAgainstExpr: dynamic_cast to Table = %p", table);
+    
     if (table != nullptr) {
-      // 尝试获取 RID，检查 tuple 是否是 RowTuple
+      // 尝试获取 RID
+      RID rid;
+      bool rid_found = false;
+      
+      // 方法1: 直接检查是否是 RowTuple
       const RowTuple *row_tuple = dynamic_cast<const RowTuple *>(&tuple);
+      LOG_DEBUG("MatchAgainstExpr: dynamic_cast to RowTuple = %p", row_tuple);
+      
       if (row_tuple != nullptr) {
         const Record &record = row_tuple->record();
-        RID rid = record.rid();
+        rid = record.rid();
+        rid_found = true;
+        LOG_DEBUG("MatchAgainstExpr: RID from RowTuple = page_num=%d, slot_num=%d", rid.page_num, rid.slot_num);
+      } else {
+        // 方法2: 从 base_rids() 中查找对应表的 RID，或递归查找 child tuple
+        LOG_ERROR("MatchAgainstExpr: tuple is not RowTuple (tuple type name unknown)");
+        LOG_ERROR("MatchAgainstExpr: trying to get RID from base_rids()");
         
-        // 获取全文索引
-        FullTextIndex *ft_idx = table->get_fulltext_index(field_name);
-        if (ft_idx != nullptr) {
-          // 使用全文索引计算BM25分数
-          double score = ft_idx->calculate_bm25(query_tokens, rid);
-          value = Value(static_cast<float>(score));
-          return RC::SUCCESS;
+        // 尝试获取 base_rids (需要非 const 访问)
+        auto &base_rids = const_cast<Tuple &>(tuple).base_rids();
+        LOG_ERROR("MatchAgainstExpr: base_rids().size() = %zu", base_rids.size());
+        
+        // 如果 base_rids 为空，尝试从 child tuple 获取（递归查找）
+        const Tuple *search_tuple = &tuple;
+        while (base_rids.empty() && search_tuple != nullptr) {
+          // 尝试转换为 ExpressionTuple (项目中使用的类型)
+          // ExpressionTuple 有 child_tuple() 方法
+          // 但由于它是模板类，我们无法直接 dynamic_cast
+          // 所以我们尝试另一种方法：检查 ProjectTuple
+          const ProjectTuple *project_tuple = dynamic_cast<const ProjectTuple *>(search_tuple);
+          if (project_tuple != nullptr) {
+            LOG_DEBUG("MatchAgainstExpr: found ProjectTuple, but cannot access child (private member)");
+            break;  // ProjectTuple 的 tuple_ 是私有的，无法访问
+          }
+          
+          // 无法继续递归，退出
+          break;
+        }
+        
+        for (const auto &pair : base_rids) {
+          BaseTable *bt = pair.first;
+          RID r = pair.second;
+          LOG_DEBUG("MatchAgainstExpr: checking base_rids entry: bt=%p (want %p), rid=page_num=%d,slot_num=%d", 
+                    bt, base_table, r.page_num, r.slot_num);
+          // 检查是否是我们要找的表
+          if (bt == base_table) {
+            rid = r;
+            rid_found = true;
+            LOG_DEBUG("MatchAgainstExpr: RID from base_rids() = page_num=%d, slot_num=%d", rid.page_num, rid.slot_num);
+            break;
+          }
+        }
+        
+        if (!rid_found) {
+          LOG_ERROR("tuple is not RowTuple and cannot find RID for table %s in base_rids()", table->name());
         }
       }
-    }
-  }
-  
-  // 如果无法使用全文索引（例如 tuple 不是 RowTuple，或者没有全文索引）
-  // 则回退到简化的BM25计算（这是为了兼容性，但不应该发生在有全文索引的情况下）
-  
-  // 获取字段值
-  Value field_value;
-  rc = field_expr_->get_value(tuple, field_value);
-  if (OB_FAIL(rc)) {
-    LOG_WARN("failed to get field value in MATCH...AGAINST expression");
-    return rc;
-  }
-
-  // 检查类型
-  if (!field_value.is_str()) {
-    LOG_WARN("MATCH...AGAINST only supports string types");
-    value = Value(0.0f);
-    return RC::INVALID_ARGUMENT;
-  }
-
-  std::string field_text = field_value.to_string();
-
-  // 对字段文本进行分词
-  std::vector<std::string> field_tokens;
-  rc = JiebaUtil::instance().tokenize(field_text, field_tokens);
-  if (OB_FAIL(rc)) {
-    LOG_WARN("failed to tokenize field text");
-    value = Value(0.0f);
-    return rc;
-  }
-
-  // 计算简化的BM25分数（回退方案，不应该在生产环境使用）
-  LOG_WARN("Using fallback BM25 calculation without fulltext index");
-  const double k1 = 1.5;
-  const double b = 0.75;
-  
-  double score = 0.0;
-  size_t doc_length = field_tokens.size();
-  const double avg_doc_length = 20.0;  // 估计值
-  
-  for (const std::string &query_term : query_tokens) {
-    if (query_term.empty()) {
-      continue;
-    }
-    
-    int term_freq = 0;
-    for (const std::string &field_term : field_tokens) {
-      if (field_term == query_term) {
-        term_freq++;
+      
+      if (rid_found) {
+        // 获取全文索引
+        FullTextIndex *ft_idx = table->get_fulltext_index(field_name);
+        LOG_DEBUG("MatchAgainstExpr: get_fulltext_index('%s') = %p", field_name, ft_idx);
+        
+        if (ft_idx != nullptr) {
+          // 使用全文索引计算BM25分数
+          LOG_INFO("Using fulltext index for field '%s', table '%s'", field_name, table->name());
+          double score = ft_idx->calculate_bm25(query_tokens, rid);
+          LOG_INFO("BM25 score from fulltext index: %.2f", score);
+          value = Value(static_cast<float>(score));
+          return RC::SUCCESS;
+        } else {
+          LOG_ERROR("Fulltext index not found for field '%s', table '%s'", field_name, table->name());
+        }
       }
+    } else {
+      LOG_ERROR("base_table cannot be cast to Table");
     }
-    
-    if (term_freq > 0) {
-      double idf = std::log(2.0);  // 固定IDF值
-      double numerator = term_freq * (k1 + 1.0);
-      double denominator = term_freq + k1 * (1.0 - b + b * (static_cast<double>(doc_length) / avg_doc_length));
-      double term_score = numerator / denominator;
-      score += idf * term_score;
-    }
+  } else {
+    LOG_ERROR("field_expr is not FieldExpr");
   }
   
-  value = Value(static_cast<float>(score));
-  return RC::SUCCESS;
+  // MATCH...AGAINST 必须使用全文索引，不能回退到简化计算
+  LOG_ERROR("MATCH...AGAINST requires fulltext index, but index not found or tuple type incorrect");
+  value = Value(0.0f);
+  return RC::INVALID_ARGUMENT;
 }
 
 RC MatchAgainstExpr::try_get_value(Value &value) const

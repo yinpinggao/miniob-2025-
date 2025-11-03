@@ -313,7 +313,7 @@ public:
 
   void append_base_rid(BaseTable *table, RID rid) { base_rids_.emplace_back(table, rid); }
 
-  void set_base_rids(std::vector<std::pair<BaseTable *, RID>> &base_rids) { base_rids_ = std::move(base_rids); }
+  void set_base_rids(std::vector<std::pair<BaseTable *, RID>> base_rids) { base_rids_ = std::move(base_rids); }
 
   std::vector<std::pair<BaseTable *, RID>> &base_rids() { return base_rids_; }
 

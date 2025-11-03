@@ -157,9 +157,9 @@ public:
 
   void reset() { base_rids_.clear(); }
 
-  void set_base_rids(std::vector<std::pair<BaseTable *, RID>> &base_rids) { base_rids_ = std::move(base_rids); }
+  void set_base_rids(std::vector<std::pair<BaseTable *, RID>> base_rids) { base_rids_ = std::move(base_rids); }
 
-  std::vector<std::pair<BaseTable *, RID>> &base_rids() { return base_rids_; }
+  virtual std::vector<std::pair<BaseTable *, RID>> &base_rids() { return base_rids_; }
 
   void append_base_rids(BaseTable *base_table, RID rid) { base_rids_.emplace_back(base_table, rid); }
 

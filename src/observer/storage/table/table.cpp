@@ -204,11 +204,11 @@ RC Table::drop()
     return RC::IOERR_WRITE;
   }
 
-  auto index_num = table_meta_.index_num();
-  for (int i = 0; i < index_num; ++i) {
-    if (indexes_[i] != nullptr) {
-      indexes_[i]->close();
-      auto index_name = table_meta_.index(i)->name();
+  // 只删除 B+树索引文件，全文索引是内存中的，不需要删除文件
+  for (Index *index : indexes_) {
+    if (index != nullptr) {
+      index->close();
+      auto index_name = index->index_meta().name();
       path            = table_index_file(base_dir_.c_str(), table_name, index_name);
       if (!filesystem::remove(path, ec)) {
         LOG_ERROR("Drop table index data fail: %s. error=%s", path.c_str(), strerror(errno));
@@ -252,19 +252,94 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
   for (int i = 0; i < index_num; i++) {
     const IndexMeta *index_meta = table_meta_.index(i);
 
-    BplusTreeIndex *index      = new BplusTreeIndex();
-    string          index_file = table_index_file(base_dir, name(), index_meta->name());
+    // 如果是全文索引，重建倒排索引
+    if (index_meta->index_type() == IndexType::FullTextIndex) {
+      LOG_INFO("Opening fulltext index: table=%s, index=%s", name(), index_meta->name());
+      
+      // 获取字段名
+      if (index_meta->fields().empty()) {
+        LOG_WARN("Fulltext index has no fields. table=%s, index=%s", name(), index_meta->name());
+        return RC::INTERNAL;
+      }
+      
+      const char *field_name = index_meta->fields()[0].name();
+      LOG_INFO("Fulltext index field name: '%s'", field_name);
+      
+      const FieldMeta *field_meta = table_meta_.field(field_name);
+      if (field_meta == nullptr) {
+        LOG_WARN("Field %s not found for fulltext index. table=%s, index=%s", field_name, name(), index_meta->name());
+        return RC::SCHEMA_FIELD_NOT_EXIST;
+      }
+      
+      // 创建倒排索引
+      auto fulltext_idx = std::make_unique<FullTextIndex>();
+      
+      // 从现有记录重建倒排索引
+      RecordFileScanner scanner;
+      rc = get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to create scanner while opening fulltext index. table=%s, index=%s, rc=%s",
+                 name(), index_meta->name(), strrc(rc));
+        return rc;
+      }
+      
+      int doc_count = 0;
+      Record record;
+      while (OB_SUCC(rc = scanner.next(record))) {
+        Value field_value;
+        rc = record.get_field(*field_meta, field_value);
+        if (OB_FAIL(rc)) {
+          LOG_WARN("failed to get field value while rebuilding fulltext index. table=%s, index=%s, rc=%s",
+                   name(), index_meta->name(), strrc(rc));
+          scanner.close_scan();
+          return rc;
+        }
+        
+        if (field_value.is_null()) {
+          continue;
+        }
+        
+        std::string text = field_value.to_string();
+        rc = fulltext_idx->add_document(record.rid(), text);
+        if (OB_FAIL(rc)) {
+          LOG_WARN("failed to add document to fulltext index. table=%s, index=%s, rc=%s",
+                   name(), index_meta->name(), strrc(rc));
+          scanner.close_scan();
+          return rc;
+        }
+        doc_count++;
+      }
+      
+      if (rc == RC::RECORD_EOF) {
+        rc = RC::SUCCESS;  // 正常结束
+      } else {
+        LOG_WARN("failed to rebuild fulltext index. table=%s, index=%s, rc=%s", name(), index_meta->name(), strrc(rc));
+        scanner.close_scan();
+        return rc;
+      }
+      scanner.close_scan();
+      
+      // 存储倒排索引
+      fulltext_indexes_[field_name] = std::move(fulltext_idx);
+      LOG_INFO("Successfully rebuilt fulltext index. table=%s, index=%s, field=%s, docs=%d", 
+               name(), index_meta->name(), field_name, doc_count);
+      
+    } else {
+      // 普通 B+树索引
+      BplusTreeIndex *index      = new BplusTreeIndex();
+      string          index_file = table_index_file(base_dir, name(), index_meta->name());
 
-    rc = index->open(this, index_file.c_str(), *index_meta);
-    if (rc != RC::SUCCESS) {
-      delete index;
-      LOG_ERROR("Failed to open index. table=%s, index=%s, file=%s, rc=%s",
-                name(), index_meta->name(), index_file.c_str(), strrc(rc));
-      // skip cleanup
-      //  do all cleanup action in destructive Table function.
-      return rc;
+      rc = index->open(this, index_file.c_str(), *index_meta);
+      if (rc != RC::SUCCESS) {
+        delete index;
+        LOG_ERROR("Failed to open index. table=%s, index=%s, file=%s, rc=%s",
+                  name(), index_meta->name(), index_file.c_str(), strrc(rc));
+        // skip cleanup
+        //  do all cleanup action in destructive Table function.
+        return rc;
+      }
+      indexes_.push_back(index);
     }
-    indexes_.push_back(index);
   }
 
   return rc;
@@ -1232,9 +1307,15 @@ RC Table::create_fulltext_index(const char *index_name, const char *column_name,
     return RC::INVALID_ARGUMENT;
   }
 
-  // Check if index already exists
+  // Check if index already exists (check both regular indexes and metadata)
   if (find_index(index_name) != nullptr) {
     LOG_WARN("Index %s already exists on table %s", index_name, name());
+    return RC::SCHEMA_INDEX_EXIST;
+  }
+  
+  // Also check if fulltext index already exists for this field
+  if (fulltext_indexes_.find(column_name) != fulltext_indexes_.end()) {
+    LOG_WARN("Fulltext index already exists on field %s of table %s", column_name, name());
     return RC::SCHEMA_INDEX_EXIST;
   }
 
@@ -1248,29 +1329,16 @@ RC Table::create_fulltext_index(const char *index_name, const char *column_name,
     return rc;
   }
 
-  // For now, we'll use B+ tree index to store the fulltext index
-  // This is a simplified implementation - a full implementation would use an inverted index
-  BplusTreeIndex *index = new BplusTreeIndex();
-  string index_file = table_index_file(base_dir_.c_str(), name(), index_name);
-
-  rc = index->create(this, index_file.c_str(), new_index_meta);
-  if (rc != RC::SUCCESS) {
-    delete index;
-    LOG_ERROR("Failed to create fulltext index. file name=%s, rc=%d:%s", index_file.c_str(), rc, strrc(rc));
-    return rc;
-  }
-
-  // Build index from existing records
+  // Build inverted index from existing records
   RecordFileScanner scanner;
   rc = get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
   if (rc != RC::SUCCESS) {
-    delete index;
     LOG_WARN("failed to create scanner while creating fulltext index. table=%s, index=%s, rc=%s",
              name(), index_name, strrc(rc));
     return rc;
   }
 
-  // Create fulltext index (inverted index)
+  // Create fulltext index (inverted index only, no B+ tree needed)
   auto fulltext_idx = std::make_unique<FullTextIndex>();
   
   // Build inverted index from existing records
@@ -1280,7 +1348,6 @@ RC Table::create_fulltext_index(const char *index_name, const char *column_name,
     Value field_value;
     rc = record.get_field(*field_meta, field_value);
     if (OB_FAIL(rc)) {
-      delete index;
       LOG_WARN("failed to get field value while building fulltext index. table=%s, index=%s, rc=%s",
                name(), index_name, strrc(rc));
       scanner.close_scan();
@@ -1296,18 +1363,7 @@ RC Table::create_fulltext_index(const char *index_name, const char *column_name,
     // Add document to fulltext index
     rc = fulltext_idx->add_document(record.rid(), text);
     if (OB_FAIL(rc)) {
-      delete index;
       LOG_WARN("failed to add document to fulltext index. table=%s, index=%s, rc=%s",
-               name(), index_name, strrc(rc));
-      scanner.close_scan();
-      return rc;
-    }
-    
-    // Also insert into B+ tree index for metadata
-    rc = index->insert_entry(record.data(), &record.rid());
-    if (rc != RC::SUCCESS) {
-      delete index;
-      LOG_WARN("failed to insert record into index. table=%s, index=%s, rc=%s",
                name(), index_name, strrc(rc));
       scanner.close_scan();
       return rc;
@@ -1316,16 +1372,13 @@ RC Table::create_fulltext_index(const char *index_name, const char *column_name,
   if (RC::RECORD_EOF == rc) {
     rc = RC::SUCCESS;
   } else {
-    delete index;
     LOG_WARN("failed to build fulltext index. table=%s, index=%s, rc=%s", name(), index_name, strrc(rc));
     scanner.close_scan();
     return rc;
   }
   scanner.close_scan();
 
-  indexes_.push_back(index);
-  
-  // Store fulltext index
+  // Store fulltext index (in-memory only, will be rebuilt on table open)
   fulltext_indexes_[column_name] = std::move(fulltext_idx);
 
   // Add index to table metadata
