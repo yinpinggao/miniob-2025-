@@ -2424,7 +2424,7 @@
                 "trace_as_input": true,
                 "trace_as_metadata": true,
                 "type": "str",
-                "value": "https://github.com/oceanbase/oceanbase-doc/tree/V4.3.5/zh-CN"
+                "value": "/root/oceanbase-doc/zh-CN"
               },
               "recursive": {
                 "_input_type": "BoolInput",
