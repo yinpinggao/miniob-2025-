@@ -36,3 +36,7 @@ package-lock.json
 observer.log*
 *.log
 logs/
+
+# MiniOB runtime system files
+miniob/db/sys/sys.db
+db/sys/sys.db
