@@ -6,93 +6,6 @@
         "className": "",
         "data": {
           "sourceHandle": {
-            "dataType": "Directory",
-            "id": "Directory-aFPPO",
-            "name": "dataframe",
-            "output_types": [
-              "DataFrame"
-            ]
-          },
-          "targetHandle": {
-            "fieldName": "data_inputs",
-            "id": "SplitText-sckG5",
-            "inputTypes": [
-              "Data",
-              "DataFrame",
-              "Message"
-            ],
-            "type": "other"
-          }
-        },
-        "id": "xy-edge__Directory-aFPPO{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-aFPPOœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-SplitText-sckG5{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-sckG5œ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}",
-        "selected": false,
-        "source": "Directory-aFPPO",
-        "sourceHandle": "{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-aFPPOœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
-        "target": "SplitText-sckG5",
-        "targetHandle": "{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-sckG5œ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}"
-      },
-      {
-        "animated": false,
-        "className": "",
-        "data": {
-          "sourceHandle": {
-            "dataType": "SplitText",
-            "id": "SplitText-sckG5",
-            "name": "dataframe",
-            "output_types": [
-              "DataFrame"
-            ]
-          },
-          "targetHandle": {
-            "fieldName": "ingest_data",
-            "id": "MiniOB-vfDdr",
-            "inputTypes": [
-              "Data",
-              "DataFrame"
-            ],
-            "type": "other"
-          }
-        },
-        "id": "xy-edge__SplitText-sckG5{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-sckG5œ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-MiniOB-vfDdr{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-vfDdrœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}",
-        "selected": false,
-        "source": "SplitText-sckG5",
-        "sourceHandle": "{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-sckG5œ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
-        "target": "MiniOB-vfDdr",
-        "targetHandle": "{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-vfDdrœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}"
-      },
-      {
-        "animated": false,
-        "className": "",
-        "data": {
-          "sourceHandle": {
-            "dataType": "OllamaEmbeddings",
-            "id": "OllamaEmbeddings-EXita",
-            "name": "embeddings",
-            "output_types": [
-              "Embeddings"
-            ]
-          },
-          "targetHandle": {
-            "fieldName": "embedding_model",
-            "id": "MiniOB-vfDdr",
-            "inputTypes": [
-              "Embeddings"
-            ],
-            "type": "other"
-          }
-        },
-        "id": "xy-edge__OllamaEmbeddings-EXita{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-EXitaœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}-MiniOB-vfDdr{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-vfDdrœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}",
-        "selected": false,
-        "source": "OllamaEmbeddings-EXita",
-        "sourceHandle": "{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-EXitaœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}",
-        "target": "MiniOB-vfDdr",
-        "targetHandle": "{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-vfDdrœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}"
-      },
-      {
-        "animated": false,
-        "className": "",
-        "data": {
-          "sourceHandle": {
             "dataType": "ChatInput",
             "id": "ChatInput-o3AkU",
             "name": "message",
@@ -258,6 +171,33 @@
         "sourceHandle": "{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-vocF7œ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}",
         "target": "ChatOutput-uA4WU",
         "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-uA4WUœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}"
+      },
+      {
+        "animated": false,
+        "data": {
+          "sourceHandle": {
+            "dataType": "OllamaEmbeddings",
+            "id": "OllamaEmbeddings-EXita",
+            "name": "embeddings",
+            "output_types": [
+              "Embeddings"
+            ]
+          },
+          "targetHandle": {
+            "fieldName": "embedding_model",
+            "id": "MiniOB-vfDdr",
+            "inputTypes": [
+              "Embeddings"
+            ],
+            "type": "other"
+          }
+        },
+        "id": "xy-edge__OllamaEmbeddings-EXita{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-EXitaœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}-MiniOB-vfDdr{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-vfDdrœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}",
+        "selected": false,
+        "source": "OllamaEmbeddings-EXita",
+        "sourceHandle": "{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-EXitaœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}",
+        "target": "MiniOB-vfDdr",
+        "targetHandle": "{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-vfDdrœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}"
       }
     ],
     "nodes": [
@@ -1252,7 +1192,7 @@
           "x": 1193.8517876487551,
           "y": 516.5095003825223
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -2712,9 +2652,9 @@
       }
     ],
     "viewport": {
-      "x": -868.4079434990535,
-      "y": -220.96620024695937,
-      "zoom": 1.0648771606295604
+      "x": -194.8822566355709,
+      "y": -175.41397701620213,
+      "zoom": 0.8070259768323907
     }
   },
   "description": "Load your data for chat context with Retrieval Augmented Generation.",
