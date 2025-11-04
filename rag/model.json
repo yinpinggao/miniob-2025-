@@ -198,6 +198,90 @@
         "sourceHandle": "{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-EXitaœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}",
         "target": "MiniOB-vfDdr",
         "targetHandle": "{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-vfDdrœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}"
+      },
+      {
+        "animated": false,
+        "data": {
+          "sourceHandle": {
+            "dataType": "Directory",
+            "id": "Directory-aFPPO",
+            "name": "dataframe",
+            "output_types": [
+              "DataFrame"
+            ]
+          },
+          "targetHandle": {
+            "fieldName": "data_inputs",
+            "id": "SplitText-sckG5",
+            "inputTypes": [
+              "Data",
+              "DataFrame",
+              "Message"
+            ],
+            "type": "other"
+          }
+        },
+        "id": "xy-edge__Directory-aFPPO{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-aFPPOœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-SplitText-sckG5{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-sckG5œ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}",
+        "selected": false,
+        "source": "Directory-aFPPO",
+        "sourceHandle": "{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-aFPPOœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
+        "target": "SplitText-sckG5",
+        "targetHandle": "{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-sckG5œ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}"
+      },
+      {
+        "animated": false,
+        "data": {
+          "sourceHandle": {
+            "dataType": "SplitText",
+            "id": "SplitText-sckG5",
+            "name": "dataframe",
+            "output_types": [
+              "DataFrame"
+            ]
+          },
+          "targetHandle": {
+            "fieldName": "ingest_data",
+            "id": "MiniOB-vfDdr",
+            "inputTypes": [
+              "Data",
+              "DataFrame"
+            ],
+            "type": "other"
+          }
+        },
+        "id": "xy-edge__SplitText-sckG5{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-sckG5œ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-MiniOB-vfDdr{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-vfDdrœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}",
+        "selected": false,
+        "source": "SplitText-sckG5",
+        "sourceHandle": "{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-sckG5œ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
+        "target": "MiniOB-vfDdr",
+        "targetHandle": "{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-vfDdrœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}"
+      },
+      {
+        "animated": false,
+        "data": {
+          "sourceHandle": {
+            "dataType": "ChatOutput",
+            "id": "ChatOutput-uA4WU",
+            "name": "message",
+            "output_types": [
+              "Message"
+            ]
+          },
+          "targetHandle": {
+            "fieldName": "input_value",
+            "id": "TestOutput-ci2kw",
+            "inputTypes": [
+              "Message"
+            ],
+            "type": "str"
+          }
+        },
+        "id": "xy-edge__ChatOutput-uA4WU{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-uA4WUœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-TestOutput-ci2kw{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-ci2kwœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "selected": false,
+        "source": "ChatOutput-uA4WU",
+        "sourceHandle": "{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-uA4WUœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "TestOutput-ci2kw",
+        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-ci2kwœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
       }
     ],
     "nodes": [
@@ -1192,7 +1276,7 @@
           "x": 1193.8517876487551,
           "y": 516.5095003825223
         },
-        "selected": true,
+        "selected": false,
         "type": "genericNode"
       },
       {
@@ -1294,8 +1378,8 @@
           "width": 320
         },
         "position": {
-          "x": 2356.5859741742806,
-          "y": 303.2955099403085
+          "x": 3298.0431614345894,
+          "y": 956.949722856792
         },
         "selected": false,
         "type": "genericNode"
@@ -1750,8 +1834,8 @@
           "width": 320
         },
         "position": {
-          "x": 773.8196414382998,
-          "y": 302.1339325691727
+          "x": 788.453690981206,
+          "y": 288.7193871548419
         },
         "selected": false,
         "type": "genericNode"
@@ -2314,7 +2398,7 @@
                 "trace_as_input": true,
                 "trace_as_metadata": true,
                 "type": "str",
-                "value": "https://github.com/oceanbase/oceanbase-doc/tree/V4.3.5/zh-CN"
+                "value": "   /root/oceanbase-doc/zh-CN"
               },
               "recursive": {
                 "_input_type": "BoolInput",
@@ -2652,9 +2736,9 @@
       }
     ],
     "viewport": {
-      "x": -408.8822566355709,
-      "y": -130.413977016202,
-      "zoom": 0.8070259768323907
+      "x": 445.834574539186,
+      "y": -136.9543371981316,
+      "zoom": 0.8200054239816915
     }
   },
   "description": "Load your data for chat context with Retrieval Augmented Generation.",
@@ -2662,7 +2746,7 @@
   "id": "e07db7d7-6d3b-4c17-8d3b-04c5cde04534",
   "is_component": false,
   "last_tested_version": "1.5.0.post2",
-  "name": "model (345)",
+  "name": "model",
   "tags": [
     "openai",
     "astradb",
