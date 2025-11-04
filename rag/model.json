@@ -805,6 +805,7 @@
             "frozen": false,
             "icon": "braces",
             "key": "parser",
+            "last_updated": "2025-11-04T12:17:52.134Z",
             "legacy": false,
             "lf_version": "1.5.0.post1",
             "metadata": {},
@@ -815,9 +816,12 @@
                 "allows_loop": false,
                 "cache": true,
                 "display_name": "Parsed Text",
+                "group_outputs": false,
                 "hidden": false,
                 "method": "parse_combined_text",
                 "name": "parsed_text",
+                "options": null,
+                "required_inputs": null,
                 "selected": "Message",
                 "tool_mode": true,
                 "types": [
@@ -830,6 +834,24 @@
             "score": 2.220446049250313e-16,
             "template": {
               "_type": "Component",
+              "clean_data": {
+                "_input_type": "BoolInput",
+                "advanced": true,
+                "display_name": "Clean Data",
+                "dynamic": false,
+                "info": "Enable to clean the data by removing empty rows and lines in each cell of the DataFrame/ Data object.",
+                "list": false,
+                "list_add_label": "Add More",
+                "name": "clean_data",
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": false,
+                "trace_as_metadata": true,
+                "type": "bool",
+                "value": true
+              },
               "code": {
                 "advanced": true,
                 "dynamic": true,
@@ -955,7 +977,7 @@
           "x": 1629.8339409521918,
           "y": 426.7445659083165
         },
-        "selected": false,
+        "selected": true,
         "type": "genericNode"
       },
       {
@@ -2736,8 +2758,8 @@
       }
     ],
     "viewport": {
-      "x": -879.2959629902105,
-      "y": -341.9471301398902,
+      "x": -1366.2959629902105,
+      "y": -272.9471301398902,
       "zoom": 1.0820036438205234
     }
   },
