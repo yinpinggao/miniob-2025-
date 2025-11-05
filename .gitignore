@@ -39,4 +39,5 @@ logs/
 
 # MiniOB runtime system files
 miniob/db/sys/sys.db
-db/sys/sys.db
+db/sys/sys.dbminiob/db/sys/dblwr.db
+miniob/db/sys/sys.db
