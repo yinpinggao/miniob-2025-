@@ -32,34 +32,9 @@
 			"visible" : true
 		}
 	],
-	"indexes" : 
-	[
-		{
-			"fields" : 
-			[
-				{
-					"FIELD_id" : 2,
-					"len" : 4097,
-					"mutable" : true,
-					"name" : "embedding",
-					"nullable" : true,
-					"offset" : 65541,
-					"type" : "vectors",
-					"visible" : true
-				}
-			],
-			"fields_offset" : 
-			[
-				0
-			],
-			"fields_total_len" : 4097,
-			"index_type" : 1,
-			"name" : "rag_vector_idx",
-			"unique" : false
-		}
-	],
+	"indexes" : null,
 	"storage_format" : 1,
-	"table_id" : 9,
+	"table_id" : 8,
 	"table_mutable" : true,
 	"table_name" : "rag_documents",
 	"table_type" : 1
