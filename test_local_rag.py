@@ -96,8 +96,7 @@ response = llm.invoke(prompt)
 answer = response.content
 print(answer)
 
-print("-" * 80)
+print("-" * 80 + "\n")
 print("✅ 测试完成！")
 print("=" * 80)
-
 client.close()
