@@ -1,0 +1,41 @@
+{
+	"fields" : 
+	[
+		{
+			"FIELD_id" : 0,
+			"len" : 5,
+			"mutable" : true,
+			"name" : "id",
+			"nullable" : true,
+			"offset" : 0,
+			"type" : "ints",
+			"visible" : true
+		},
+		{
+			"FIELD_id" : 1,
+			"len" : 65536,
+			"mutable" : true,
+			"name" : "title",
+			"nullable" : true,
+			"offset" : 5,
+			"type" : "texts",
+			"visible" : true
+		},
+		{
+			"FIELD_id" : 2,
+			"len" : 65536,
+			"mutable" : true,
+			"name" : "body",
+			"nullable" : true,
+			"offset" : 65541,
+			"type" : "texts",
+			"visible" : true
+		}
+	],
+	"indexes" : null,
+	"storage_format" : 1,
+	"table_id" : 8,
+	"table_mutable" : true,
+	"table_name" : "text2",
+	"table_type" : 1
+}
