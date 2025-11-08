@@ -43,7 +43,7 @@ def main():
     PORT = 6789
     TABLE_NAME = 'rag_documents'
     # 从环境变量获取文档路径，如果没有则使用默认路径
-    DOC_PATH = os.getenv('OB_DOC_PATH', '/root/source/miniob/zh-CN')
+    DOC_PATH = '/root/source/miniob/zh-CN'
     
     print(f"\n📋 配置：")
     print(f"  - MiniOB: {HOST}:{PORT}")
@@ -104,7 +104,7 @@ def main():
         return
     
     # 处理合理数量的数据
-    MAX_CHUNKS = 8000  # 用于测评的数据量
+    MAX_CHUNKS = 200 # 用于测评的数据量
     if len(chunks) > MAX_CHUNKS:
         print(f"\n⚠️  限制处理前 {MAX_CHUNKS} 个文本块（共 {len(chunks)} 个）")
         chunks = chunks[:MAX_CHUNKS]
