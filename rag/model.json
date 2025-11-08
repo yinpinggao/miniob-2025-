@@ -2442,7 +2442,7 @@
                 "tool_mode": false,
                 "trace_as_metadata": true,
                 "type": "bool",
-                "value": false
+                "value": true
               },
               "silent_errors": {
                 "_input_type": "BoolInput",
