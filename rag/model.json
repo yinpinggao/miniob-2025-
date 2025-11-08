@@ -939,7 +939,7 @@
                 "trace_as_input": true,
                 "trace_as_metadata": true,
                 "type": "str",
-                "value": "- [排名 {metadata}] {text}"
+                "value": "- 内容：{text}"
               },
               "sep": {
                 "_input_type": "MessageTextInput",
