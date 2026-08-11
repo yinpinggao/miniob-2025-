@@ -1,0 +1,12 @@
+-- echo setup
+create table t(id int);
+insert into t values (1);
+
+-- echo null is not first
+select * from t where id not in (2, null);
+
+-- echo null is first
+select * from t where id not in (null);
+
+-- echo process survived
+select * from t;
