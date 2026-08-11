@@ -58,7 +58,7 @@
 | 8 | multi-index | 复合索引能创建和维护，但查询计划不会真正使用 |
 | 9 | unique | 单事务主路径可用；MVCC 并发唯一性和 NULL comparator 有缺陷 |
 | 10 | group-by | 聚合主链路可用；“Hash” 分组实际顺序查找，NULL 会与 0 混组 |
-| 11 | simple-sub-query | scalar、IN、EXISTS 可执行；首个 RHS 为 NULL 的 NOT IN 会使 observer 崩溃，且子查询存在 MVCC 可见性错误 |
+| 11 | simple-sub-query | scalar、IN、EXISTS 可执行；NOT IN 的首个 RHS NULL 崩溃与三值过滤已修复，子查询仍存在 MVCC 可见性问题 |
 | 12 | alias | 基本表/列别名可用；遮蔽、歧义诊断和视图别名有边界 |
 | 13 | null | 有物理 NULL 标志和简化语义；没有完整 SQL 三值逻辑 |
 | 14 | union | UNION ALL 流式、UNION 哈希去重；NULL/浮点 hash-equality 有风险 |

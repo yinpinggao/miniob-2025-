@@ -199,7 +199,7 @@ WHERE EXISTS (
 
 ### 实现边界
 
-- 已实测：`NOT IN (NULL)` 是崩溃级 bug，不只是三值语义不完整。代码只在读取“后续”右值时检查 NULL；第一个右值为 NULL 时，[`ComparisonExpr::get_value`](../../../src/observer/sql/expr/expression.cpp#L307-L318) 直接调用 `left_value.compare(right_value)`，INT 左值随后在 [`IntegerType::compare`](../../../src/observer/common/type/integer_type.cpp#L17-L20) 因右值不是数值而触发断言，observer 进程退出。正确语义应是 UNKNOWN（WHERE 中不返回）。
+- 已修复：`ComparisonExpr::get_value` 现在遍历 RHS 时先识别 NULL，仅对非 NULL 值调用 compare。无匹配且 RHS 含 NULL 时，`IN/NOT IN` 在 predicate 中均以 false 表示 UNKNOWN 过滤；首个 RHS 为 NULL 不再进入 `IntegerType::compare` 崩溃。同时区分可继续拉取的 list/subquery 与单值 RHS，避免单值表达式重复求值导致死循环。
 - 左值 NULL 被直接算作 false；对于 WHERE 过滤效果常等价 UNKNOWN，但没有完整三值逻辑。
 - 标量比较会正确拒绝多行子查询，但 IN 允许多行。
 - 子查询 open 时传入 `nullptr` 事务指针；MVCC 扫描遇到空事务指针会跳过可见性判断，见 [RecordFileScanner](../../../src/observer/storage/record/record_manager.cpp)。因此 MVCC 子查询可能读到未提交数据。

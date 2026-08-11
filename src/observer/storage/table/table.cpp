@@ -71,6 +71,14 @@ RC build_index_meta_with_mapping(const TableMeta &new_meta,
     new_fields.push_back(*new_field);
   }
 
+  if (old_index_meta.index_type() == IndexType::VectorIVFFlatIndex) {
+    return result.init_vector(old_index_meta.name(),
+        old_index_meta.index_type(),
+        new_fields,
+        old_index_meta.vector_distance_type(),
+        old_index_meta.vector_lists(),
+        old_index_meta.vector_probes());
+  }
   return result.init(old_index_meta.name(), old_index_meta.index_type(), new_fields, old_index_meta.unique());
 }
 
@@ -187,34 +195,52 @@ RC Table::drop()
     return rc;
   }
 
-  // 清理全文索引
+  // Close every resource before unlinking its backing file. In particular,
+  // the record handler and data buffer pool otherwise keep the data file open.
+  for (Index *index : indexes_) {
+    if (index != nullptr && OB_FAIL(rc = index->close())) {
+      LOG_ERROR("Failed to close index %s while dropping table %s. rc=%s",
+          index->index_meta().name(), name(), strrc(rc));
+      return rc;
+    }
+  }
+
+  rc = close_record_handler();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
   fulltext_indexes_.clear();
 
   auto       table_name = name();
   error_code ec;
-  auto       path = table_meta_file(base_dir_.c_str(), table_name);
-  if (!filesystem::remove(path, ec)) {
-    LOG_ERROR("Drop table meta fail: %s. error=%s", path.c_str(), strerror(errno));
-    return RC::IOERR_WRITE;
-  }
 
-  path = table_data_file(base_dir_.c_str(), table_name);
-  if (!filesystem::remove(path, ec)) {
-    LOG_ERROR("Drop table data fail: %s. error=%s", path.c_str(), strerror(errno));
-    return RC::IOERR_WRITE;
-  }
-
-  // 只删除 B+树索引文件，全文索引是内存中的，不需要删除文件
+  // IVF and full-text indexes are currently rebuilt from table data and do
+  // not own an index file. Only B+Tree indexes have a backing file to remove.
   for (Index *index : indexes_) {
-    if (index != nullptr) {
-      index->close();
+    if (index != nullptr && index->index_meta().index_type() == IndexType::BPlusTreeIndex) {
       auto index_name = index->index_meta().name();
-      path            = table_index_file(base_dir_.c_str(), table_name, index_name);
-      if (!filesystem::remove(path, ec)) {
-        LOG_ERROR("Drop table index data fail: %s. error=%s", path.c_str(), strerror(errno));
+      auto path       = table_index_file(base_dir_.c_str(), table_name, index_name);
+      filesystem::remove(path, ec);
+      if (ec) {
+        LOG_ERROR("Drop table index data fail: %s. error=%s", path.c_str(), ec.message().c_str());
         return RC::IOERR_WRITE;
       }
     }
+  }
+
+  auto path = table_data_file(base_dir_.c_str(), table_name);
+  filesystem::remove(path, ec);
+  if (ec) {
+    LOG_ERROR("Drop table data fail: %s. error=%s", path.c_str(), ec.message().c_str());
+    return RC::IOERR_WRITE;
+  }
+
+  path = table_meta_file(base_dir_.c_str(), table_name);
+  filesystem::remove(path, ec);
+  if (ec) {
+    LOG_ERROR("Drop table meta fail: %s. error=%s", path.c_str(), ec.message().c_str());
+    return RC::IOERR_WRITE;
   }
 
   return RC::SUCCESS;
@@ -252,8 +278,57 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
   for (int i = 0; i < index_num; i++) {
     const IndexMeta *index_meta = table_meta_.index(i);
 
-    // 如果是全文索引，重建倒排索引
-    if (index_meta->index_type() == IndexType::FullTextIndex) {
+    if (index_meta->index_type() == IndexType::VectorIVFFlatIndex) {
+      if (index_meta->fields().empty()) {
+        LOG_WARN("Vector index has no fields. table=%s, index=%s", name(), index_meta->name());
+        return RC::SCHEMA_FIELD_MISSING;
+      }
+
+      const FieldMeta *field_meta = table_meta_.field(index_meta->fields()[0].name());
+      if (field_meta == nullptr) {
+        return RC::SCHEMA_FIELD_NOT_EXIST;
+      }
+
+      auto   index      = std::make_unique<IvfflatIndex>();
+      string index_file = table_index_file(base_dir, name(), index_meta->name());
+      rc                = index->open(this, index_file.c_str(), *index_meta, *field_meta);
+      if (OB_FAIL(rc)) {
+        LOG_ERROR("Failed to initialize vector index. table=%s, index=%s, rc=%s",
+            name(), index_meta->name(), strrc(rc));
+        return rc;
+      }
+
+      RecordFileScanner scanner;
+      rc = get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+
+      std::vector<std::pair<std::vector<float>, RID>> data;
+      Record record;
+      while (OB_SUCC(rc = scanner.next(record))) {
+        Value value;
+        rc = record.get_field(*field_meta, value);
+        if (OB_FAIL(rc)) {
+          scanner.close_scan();
+          return rc;
+        }
+        if (!value.is_null()) {
+          data.emplace_back(value.get_vector(), record.rid());
+        }
+      }
+      scanner.close_scan();
+      if (rc != RC::RECORD_EOF) {
+        return rc;
+      }
+
+      rc = index->build_index(
+          data, index_meta->vector_distance_type(), {index_meta->vector_lists(), index_meta->vector_probes()});
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      indexes_.push_back(index.release());
+    } else if (index_meta->index_type() == IndexType::FullTextIndex) {
       LOG_INFO("Opening fulltext index: table=%s, index=%s", name(), index_meta->name());
       
       // 获取字段名
@@ -1177,14 +1252,20 @@ RC Table::create_index(
 RC Table::create_vector_index(Trx *trx, IndexType index_type, const vector<FieldMeta> &field_meta,
     const char *index_name, NormalFunctionType distance_type, const std::vector<int> &options)
 {
-  if (common::is_blank(index_name)) {
+  if (common::is_blank(index_name) || field_meta.size() != 1 || field_meta[0].type() != AttrType::VECTORS) {
     LOG_INFO("Invalid input arguments, table name is %s, index_name is blank or attribute_name is blank", name());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  int lists  = options.size() >= 1 ? options[0] : 1;
+  int probes = options.size() >= 2 ? options[1] : 1;
+  if (lists <= 0 || probes <= 0) {
     return RC::INVALID_ARGUMENT;
   }
 
   IndexMeta new_index_meta;
 
-  RC rc = new_index_meta.init(index_name, index_type, field_meta);
+  RC rc = new_index_meta.init_vector(index_name, index_type, field_meta, distance_type, lists, probes);
   if (rc != RC::SUCCESS) {
     LOG_INFO("Failed to init IndexMeta in table:%s, index:%s",
              name(), new_index_meta.to_string().c_str());
@@ -1192,11 +1273,10 @@ RC Table::create_vector_index(Trx *trx, IndexType index_type, const vector<Field
   }
 
   // 创建索引相关数据
-  auto   index      = new IvfflatIndex();
+  auto   index      = std::make_unique<IvfflatIndex>();
   string index_file = table_index_file(base_dir_.c_str(), name(), index_name);
   rc                = index->create(this, index_file.c_str(), new_index_meta, field_meta[0]);
   if (rc != RC::SUCCESS) {
-    delete index;
     LOG_ERROR("Failed to create Ivfflat index. file name=%s, rc=%d:%s", index_file.c_str(), rc, strrc(rc));
     return rc;
   }
@@ -1218,9 +1298,12 @@ RC Table::create_vector_index(Trx *trx, IndexType index_type, const vector<Field
     // 目前向量仅在一列上建立索引
     rc = record.get_field(field_meta[0], value);
     if (OB_FAIL(rc)) {
+      scanner.close_scan();
       return rc;
     }
-    data.emplace_back(value.get_vector(), record.rid());
+    if (!value.is_null()) {
+      data.emplace_back(value.get_vector(), record.rid());
+    }
   }
 
   if (RC::RECORD_EOF == rc) {
@@ -1234,11 +1317,12 @@ RC Table::create_vector_index(Trx *trx, IndexType index_type, const vector<Field
   scanner.close_scan();
 
   // 建立向量索引
-  index->build_index(data, distance_type, options);
+  rc = index->build_index(data, distance_type, {lists, probes});
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
 
   LOG_INFO("inserted all records into new index. table=%s, index=%s", name(), index_name);
-
-  indexes_.emplace_back(index);
 
   /// 接下来将这个索引放到表的元数据中
   TableMeta new_table_meta(table_meta_);
@@ -1276,6 +1360,7 @@ RC Table::create_vector_index(Trx *trx, IndexType index_type, const vector<Field
   }
 
   table_meta_.swap(new_table_meta);
+  indexes_.emplace_back(index.release());
 
   LOG_INFO("Successfully added a new index (%s) on the table (%s)", index_name, name());
   return rc;

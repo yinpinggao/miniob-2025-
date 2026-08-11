@@ -96,10 +96,8 @@ IVF 的数据结构是中心点 `centroids_` 和每个中心的 `(vector, RID)` 
 
 ### 边界与缺陷
 
-- IVF 对 inner product 仍以升序排序：[`ivfflat_index.cpp`](../../../src/observer/storage/index/ivfflat_index.cpp#L181-L202)，方向错误。
-- `probes_` 没有 clamp 到中心数，`probes_ > centroids_.size()` 会访问越界：[`ivfflat_index.cpp`](../../../src/observer/storage/index/ivfflat_index.cpp#L190-L193)。
-- 空表建索引后中心为空，第一次 `insert_entry` 会按空中心找 bucket，存在越界风险：[`ivfflat_index.cpp`](../../../src/observer/storage/index/ivfflat_index.cpp#L224-L229)。
-- IVF `open` 没有恢复数据，且 `delete_entry` 是空实现：[`ivfflat_index.cpp`](../../../src/observer/storage/index/ivfflat_index.cpp#L86-L118) 与 [`ivfflat_index.cpp`](../../../src/observer/storage/index/ivfflat_index.cpp#L232)。重启问题更严重：[`Table::open`](../../../src/observer/storage/table/table.cpp#L327-L342) 只对全文索引特别分支，其他索引一律构造 `BplusTreeIndex` 并尝试打开索引文件。IVF 没有持久化该文件，因此重启后不是“索引数据丢失但表可用”，而是整张表打开失败。删除、UPDATE 的索引一致性也仍不可靠。
+- 已修复的 IVF 问题：inner product 按分数降序选候选；`probes` 会 clamp 到实际中心数；空索引首次插入会初始化中心/bucket；`delete_entry` 会按 RID 移除条目。
+- `IndexMeta` 现在持久化 distance/lists/probes，[`Table::open`](../../../src/observer/storage/table/table.cpp) 能识别 IVF 元数据并扫描表记录重建内存索引，不再当作 B+Tree 打开不存在的文件。旧元数据缺少这些字段时用 L2/lists=1/probes=1 兼容重建。
 
 ### 老师追问与参考回答
 
@@ -245,7 +243,7 @@ WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.id = t1.id);
 ### 边界与缺陷
 
 - `ComparisonExpr` 用 `subquery_expr->open(nullptr, tuple)`：[`expression.cpp`](../../../src/observer/sql/expr/expression.cpp#L231-L239)。内层 scan 因 trx 为 null 而不检查 MVCC 可见性：[`record_manager.cpp`](../../../src/observer/storage/record/record_manager.cpp#L831-L838)。
-- `IN/NOT IN` 的 NULL 三值逻辑不完整；代码只在后续 RHS 行显式处理 NULL，首个 RHS NULL 会走普通 compare：[`expression.cpp`](../../../src/observer/sql/expr/expression.cpp#L293-L331)。
+- `IN/NOT IN` 的首个 RHS NULL 崩溃已修复；当无非 NULL 匹配但 RHS 含 NULL 时，predicate 返回 false 以实现 UNKNOWN 过滤。
 - `SubQueryExpr` 中的 `res_query/visited_index` 没有驱动实际执行：[`expression.h`](../../../src/observer/sql/expr/expression.h#L560-L572)。
 - 子查询放到投影而非 comparison 时，没有统一的 open 生命周期保证；当前主要路径依赖 `ComparisonExpr` 显式 open。
 

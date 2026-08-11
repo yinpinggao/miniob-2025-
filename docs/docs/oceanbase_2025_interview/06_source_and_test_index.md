@@ -163,7 +163,7 @@ NULL | 3
 
 正确结果应有 NULL 组和 0 组两组。
 
-### 4.8 NOT IN(NULL) 会导致 observer 崩溃
+### 4.8 NOT IN(NULL) 崩溃已修复
 
 ```sql
 select id
@@ -171,7 +171,7 @@ from t_update
 where id not in (select g from t_null where id=1);
 ```
 
-右侧首个值为 NULL 时，当前 observer 不是简单返回错误行，而是在 `expression.cpp:313` 对 NULL 执行数值 compare，随后在 `integer_type.cpp:20` 触发 `right type is not numeric` 断言，进程以 134 退出。已用 `id NOT IN (NULL)` 针对性复现。标准 SQL 应得到 UNKNOWN，WHERE 中不返回任何行。
+修复前，右侧首个值为 NULL 会在 `IntegerType::compare` 触发 `right type is not numeric` 断言，进程以 134 退出。修复后 `id NOT IN (NULL)` 输出空结果且 observer 继续运行；`id IN (NULL, 1)` 正常匹配 1。单元素 RHS 也有独立回归用例，避免对不可迭代的常量表达式反复求值。
 
 ### 4.9 TEXT 是定长内联
 

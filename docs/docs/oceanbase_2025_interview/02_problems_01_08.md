@@ -218,10 +218,8 @@ DropTableExecutor 找到当前 Db，Db 找到 Table，Table 刷新脏页并尝�
 
 ### 当前实现边界
 
-当前 [Table::drop](../../../src/observer/storage/table/table.cpp#L183) 的实际顺序是：sync → 清空全文索引 → 删除 meta → 删除 data → 遍历并关闭 B+Tree index、删除索引文件；而 `record_handler_`、data buffer pool 到 `Table::~Table()` 才处理，见 `table.cpp:79-98`。这意味着：
+当前 [Table::drop](../../../src/observer/storage/table/table.cpp#L183) 已调整为：sync → 关闭所有 index → 关闭 `record_handler_`/data buffer pool → 清理全文索引 → 删除 B+Tree index/data/meta 文件。IVF 和全文索引当前没有独立索引文件，DROP 不再尝试删除不存在的 IVF 文件。因此 data/index 文件都会在句柄关闭后再 unlink。仍需注意：
 
-- 删除 data/meta 时文件仍可能被 handler/buffer pool 打开；
-- 索引文件在删除前会先调用 `index->close()`，因此不存在“删索引文件时 index handler 仍打开”的问题；真正仍打开的是 data 文件相关的 `record_handler_`/buffer pool；
 - 中途失败可能留下部分文件已删除、内存状态不完整；
 - 并发查询持有 Table 指针时没有显式生命周期协调。
 

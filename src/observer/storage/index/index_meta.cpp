@@ -26,6 +26,27 @@ RC IndexMeta::init(const char *name, IndexType index_type, const vector<FieldMet
   return RC::SUCCESS;
 }
 
+RC IndexMeta::init_vector(const char *name, IndexType index_type, const vector<FieldMeta> &fields,
+    NormalFunctionType distance_type, int lists, int probes)
+{
+  bool valid_distance = distance_type == NormalFunctionType::L2_DISTANCE ||
+                        distance_type == NormalFunctionType::COSINE_DISTANCE ||
+                        distance_type == NormalFunctionType::INNER_PRODUCT;
+  if (index_type != IndexType::VectorIVFFlatIndex || !valid_distance || lists <= 0 || probes <= 0) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  RC rc = init(name, index_type, fields, false);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  vector_distance_type_ = distance_type;
+  vector_lists_         = lists;
+  vector_probes_        = probes;
+  return RC::SUCCESS;
+}
+
 string IndexMeta::to_string() const
 {
   std::ostringstream oss;
@@ -46,6 +67,11 @@ void IndexMeta::to_json(Json::Value &json_value) const
   json_value["index_type"]       = static_cast<int>(index_type_);
   json_value["fields_total_len"] = fields_total_len_;
   json_value["unique"]           = unique_;
+  if (index_type_ == IndexType::VectorIVFFlatIndex) {
+    json_value["vector_distance_type"] = static_cast<int>(vector_distance_type_);
+    json_value["vector_lists"]         = vector_lists_;
+    json_value["vector_probes"]        = vector_probes_;
+  }
 
   Json::Value fields_json(Json::arrayValue);
   for (const auto &field : fields_) {
@@ -73,6 +99,26 @@ RC IndexMeta::from_json(const Json::Value &json_value, IndexMeta &index)
   index.index_type_       = static_cast<IndexType>(json_value["index_type"].asInt());
   index.fields_total_len_ = json_value["fields_total_len"].asInt();
   index.unique_           = json_value["unique"].asBool();
+
+  if (index.index_type_ == IndexType::VectorIVFFlatIndex) {
+    // Old metadata did not persist IVF configuration. Keep conservative
+    // defaults so such tables can still be opened and rebuilt.
+    if (json_value.isMember("vector_distance_type")) {
+      index.vector_distance_type_ = static_cast<NormalFunctionType>(json_value["vector_distance_type"].asInt());
+    }
+    if (json_value.isMember("vector_lists")) {
+      index.vector_lists_ = json_value["vector_lists"].asInt();
+    }
+    if (json_value.isMember("vector_probes")) {
+      index.vector_probes_ = json_value["vector_probes"].asInt();
+    }
+    bool valid_distance = index.vector_distance_type_ == NormalFunctionType::L2_DISTANCE ||
+                          index.vector_distance_type_ == NormalFunctionType::COSINE_DISTANCE ||
+                          index.vector_distance_type_ == NormalFunctionType::INNER_PRODUCT;
+    if (!valid_distance || index.vector_lists_ <= 0 || index.vector_probes_ <= 0) {
+      return RC::INVALID_ARGUMENT;
+    }
+  }
 
   const Json::Value &fields_json = json_value["fields"];
   for (const auto &field_json : fields_json) {

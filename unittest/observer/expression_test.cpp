@@ -307,6 +307,40 @@ TEST(ComparisonExpr, comparison_expr_test)
   }
 }
 
+TEST(ComparisonExpr, in_and_not_in_null_semantics)
+{
+  RowTuple tuple;
+
+  auto evaluate = [&tuple](CompOp op, Value left, std::vector<Value> right_values) {
+    std::vector<std::unique_ptr<Expression>> right_exprs;
+    right_exprs.reserve(right_values.size());
+    for (Value &right_value : right_values) {
+      right_exprs.emplace_back(std::make_unique<ValueExpr>(right_value));
+    }
+
+    ComparisonExpr expr(op, std::make_unique<ValueExpr>(left), std::make_unique<ListExpr>(std::move(right_exprs)));
+    Value          result;
+    EXPECT_EQ(RC::SUCCESS, expr.get_value(tuple, result));
+    return result.get_boolean();
+  };
+
+  EXPECT_FALSE(evaluate(NOT_IN_OP, Value(1), {Value(NullValue())}));
+  EXPECT_FALSE(evaluate(NOT_IN_OP, Value(1), {Value(2), Value(NullValue())}));
+  EXPECT_FALSE(evaluate(IN_OP, Value(1), {Value(NullValue()), Value(2)}));
+  EXPECT_TRUE(evaluate(IN_OP, Value(1), {Value(NullValue()), Value(1)}));
+  EXPECT_FALSE(evaluate(NOT_IN_OP, Value(1), {Value(NullValue()), Value(1)}));
+  EXPECT_TRUE(evaluate(NOT_IN_OP, Value(1), {Value(2), Value(3)}));
+  EXPECT_FALSE(evaluate(IN_OP, Value(1), {}));
+  EXPECT_TRUE(evaluate(NOT_IN_OP, Value(1), {}));
+  EXPECT_FALSE(evaluate(NOT_IN_OP, Value(NullValue()), {Value(1)}));
+
+  ComparisonExpr scalar_not_in(
+      NOT_IN_OP, std::make_unique<ValueExpr>(Value(1)), std::make_unique<ValueExpr>(Value(NullValue())));
+  Value scalar_result;
+  EXPECT_EQ(RC::SUCCESS, scalar_not_in.get_value(tuple, scalar_result));
+  EXPECT_FALSE(scalar_result.get_boolean());
+}
+
 TEST(AggregateFunctionExpr, aggregate_expr_test)
 {
   Value                  int_value(1);

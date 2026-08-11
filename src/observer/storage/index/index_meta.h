@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "common/rc.h"
 #include "common/lang/string.h"
+#include "sql/builtin/builtin.h"
 #include "storage/field/field_meta.h"
 
 #include <json/value.h>
@@ -39,6 +40,8 @@ public:
   IndexMeta() = default;
 
   [[nodiscard]] RC init(const char *name, IndexType index_type, const vector<FieldMeta> &fields, bool unique = false);
+  [[nodiscard]] RC init_vector(const char *name, IndexType index_type, const vector<FieldMeta> &fields,
+      NormalFunctionType distance_type, int lists, int probes);
 
   void desc(ostream &os) const { os << to_string(); }
 
@@ -69,6 +72,9 @@ public:
   [[nodiscard]] const vector<FieldMeta> &fields() const { return fields_; }
   [[nodiscard]] bool                     unique() const { return unique_; }
   [[nodiscard]] const vector<int>       &fields_offset() const { return fields_offset_; }
+  [[nodiscard]] NormalFunctionType       vector_distance_type() const { return vector_distance_type_; }
+  [[nodiscard]] int                      vector_lists() const { return vector_lists_; }
+  [[nodiscard]] int                      vector_probes() const { return vector_probes_; }
 
 private:
   string            name_;
@@ -76,5 +82,8 @@ private:
   int               fields_total_len_ = 0;
   vector<int>       fields_offset_;
   vector<FieldMeta> fields_;
-  bool              unique_;
+  bool               unique_               = false;
+  NormalFunctionType vector_distance_type_ = NormalFunctionType::L2_DISTANCE;
+  int                vector_lists_         = 1;
+  int                vector_probes_        = 1;
 };

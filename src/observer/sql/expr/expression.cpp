@@ -293,6 +293,7 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value)
   // Handle IN and NOT IN operations
   if (comp_ == IN_OP || comp_ == NOT_IN_OP) {
     if (left_value.is_null()) {
+      // SQL UNKNOWN is represented as false in predicate evaluation.
       value.set_boolean(false);
       return RC::SUCCESS;
     }
@@ -301,34 +302,34 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value)
       static_cast<ListExpr *>(right_.get())->reset();
     }
 
-    // 比较表达式的结果，如果进入 while 循环且没有提前退出，那么结果即为该值
-    bool res = comp_ == NOT_IN_OP;
+    bool matched           = false;
+    bool has_null          = false;
+    bool multi_value_right = right_->type() == ExprType::EXPRLIST || right_->type() == ExprType::SUBQUERY;
+    while (RC::SUCCESS == (rc = right_->get_value(tuple, right_value))) {
+      if (right_value.is_null()) {
+        has_null = true;
+      } else if (left_value.compare(right_value) == 0) {
+        matched = true;
+        break;
+      }
 
-    rc = right_->get_value(tuple, right_value);
-    if (rc == RC::RECORD_EOF) {
-      // 子查询结果为空，返回 null 值
-    } else if (OB_FAIL(rc)) {
-      // 其他错误
-      return rc;
-    } else if (left_value.compare(right_value) == 0) {
-      // 不为空才能比较，null 是不可比较的
-      res = comp_ == IN_OP;
-    } else {
-      while (RC::SUCCESS == (rc = right_->get_value(tuple, right_value))) {
-        if (right_value.is_null()) {
-          // 对于 not in，一边有 null 就为假
-          if (comp_ == NOT_IN_OP) {
-            res = false;
-            break;
-          }
-        } else if (left_value.compare(right_value) == 0) {
-          res = comp_ == IN_OP;
-          break;
-        }
+      // A scalar right expression always returns the same value. Only lists
+      // and subqueries can advance to another candidate.
+      if (!multi_value_right) {
+        rc = RC::RECORD_EOF;
+        break;
       }
     }
-    value.set_boolean(res);
-    return rc == RC::RECORD_EOF ? RC::SUCCESS : rc;
+
+    if (rc != RC::SUCCESS && rc != RC::RECORD_EOF) {
+      return rc;
+    }
+
+    // A match determines IN/NOT IN immediately. Without a match, a NULL on
+    // the right makes the SQL result UNKNOWN, which predicates filter out.
+    bool result = matched ? comp_ == IN_OP : (!has_null && comp_ == NOT_IN_OP);
+    value.set_boolean(result);
+    return RC::SUCCESS;
   }
 
   // Get the value of the right expression

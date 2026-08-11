@@ -90,7 +90,7 @@ NULL 表示未知或缺失，不是某个普通值。SQL 比较需要三值逻�
 
 ### Q11：`NOT IN (NULL)` 为什么不是 TRUE？
 
-`x NOT IN (NULL)` 等价于“x 是否与集合中所有元素都不相等”。标准语义是 UNKNOWN，在 WHERE 中应被过滤。但本项目的实际问题更严重：首个右值为 NULL 时，`expression.cpp:313` 未先检查 NULL 就调用 compare，随后在 `integer_type.cpp:20` 触发断言，observer 进程直接崩溃。
+`x NOT IN (NULL)` 的标准语义是 UNKNOWN，在 WHERE 中应被过滤。项目曾因首个 RHS NULL 未检查而在 `IntegerType::compare` 触发断言；现已改为先记录 RHS 是否含 NULL，只比较非 NULL 值，无匹配且含 NULL 时以 false 实现 predicate 的 UNKNOWN 过滤。
 
 ### Q12：为什么 Hash Group By 通常是 O(N)？
 
@@ -214,7 +214,7 @@ UNION ALL 直接拼接结果，可以流式输出；UNION 还要按整行去重�
 
 > `NOT IN (NULL)` 只是三值逻辑未完善，最多多返回几行。
 
-正确说法：首个 RHS 为 NULL 时会走进数值 compare 并触发断言，这是会杀死 observer 进程的崩溃级 bug；三值语义只是应有行为。
+正确说法：这曾是会杀死 observer 的崩溃级 bug，现在已修复首值 NULL 检查和 UNKNOWN 过滤；还应说清修复前的根因与回归用例。
 
 不要说：
 
