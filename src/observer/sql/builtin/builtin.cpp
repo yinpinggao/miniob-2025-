@@ -217,16 +217,18 @@ RC date_format(const vector<Value> &args, Value &result)
   auto fmt = args[1].to_string();
 
   string str;
+  const string four_digit_year = std::string(4 - std::to_string(year).length(), '0') + std::to_string(year);
+  const int    two_digit_year  = year % 100;
 
   // 遍历格式字符串，并替换格式符
   for (size_t i = 0; i < fmt.length(); ++i) {
     if (fmt[i] == '%' && i + 1 < fmt.length()) {
       switch (fmt[i + 1]) {
         case 'Y':  // 四位数年份
-          str += std::to_string(year);
+          str += four_digit_year;
           break;
         case 'y':  // 两位数年份
-          str += std::to_string(year).substr(2, 2);
+          str += (two_digit_year < 10 ? "0" : "") + std::to_string(two_digit_year);
           break;
         case 'm':  // 两位数月份
           str += (month < 10 ? "0" : "") + std::to_string(month);

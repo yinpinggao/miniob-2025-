@@ -190,8 +190,9 @@
        value.set_null();
      }
  
-     // 记录是否有任何非 NULL 值插入到当前表
-     bool has_value = false;
+    // 记录视图中是否有字段映射到当前表。即使映射值全为 NULL，也应让
+    // 基表的 nullable/NOT NULL 约束决定插入是否成功，不能静默跳过。
+    bool has_mapped_field = false;
      
      for (int i = 0; i < logical_field_num; ++i) {
        auto &[base_table, field_id] = field_index_[i];
@@ -205,22 +206,18 @@
          return rc;
        }
  
-       if (field_id < 0 || field_id >= value_num) {
-         LOG_ERROR("Invalid field mapping while inserting into view %s", name());
-         return RC::INTERNAL;
-       }
-       
-       // 如果有非 NULL 值，标记该表需要插入
-       if (!value.is_null()) {
-         has_value = true;
-       }
-       values[field_id] = std::move(value);
-     }
- 
-     // 只有当该表至少有一个非 NULL 值时才插入
-     if (!has_value) {
-       continue;
-     }
+      if (field_id < 0 || field_id >= value_num) {
+        LOG_ERROR("Invalid field mapping while inserting into view %s", name());
+        return RC::INTERNAL;
+      }
+
+      has_mapped_field = true;
+      values[field_id] = std::move(value);
+    }
+
+    if (!has_mapped_field) {
+      continue;
+    }
  
      Record real_record;
      rc = table->make_record(value_num, values.data(), real_record);
@@ -459,4 +456,3 @@
  
    return rc;
  }
- 

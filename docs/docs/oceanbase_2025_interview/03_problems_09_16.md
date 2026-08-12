@@ -86,6 +86,8 @@ DROP INDEX uk_ab ON u;
 
 实现 `MAX/MIN/COUNT/AVG/SUM`、单列或多列 `GROUP BY`，并支持在聚合后使用 `HAVING` 过滤。SELECT 中混入未分组普通列和聚合列应报错。
 
+题面这里有一处自相矛盾：前半段把 `SELECT COUNT(id) FROM t1 GROUP BY name HAVING COUNT(id) > 2` 写进 FAILURE 示例，后半段又把完全相同的 SQL 作为 GROUP BY/HAVING 必须支持的示例。结合本题标题和后半段的明确要求，应以“支持该 SQL”为准；不能据前一个示例把所有“只输出聚合、按未输出列分组”的查询判错。
+
 ### 必要原理
 
 逻辑执行顺序可记为：`FROM/JOIN -> WHERE -> GROUP BY + aggregate -> HAVING -> ORDER BY -> LIMIT -> SELECT 输出`。其中 WHERE 过滤原始行，HAVING 过滤“每个组产生的一行”。
@@ -378,6 +380,7 @@ UNION ALL 额外空间接近 `O(1)`，时间 `O(N)`。哈希 UNION DISTINCT 平�
 - 已实测/审查风险：浮点 `Value::compare` 的相等关系与 `std::hash<float>` 的 hash 关系在 `-0/+0`、NaN 等情况下不一定满足“相等对象必须同 hash”。`unordered_set` 因而有去重不稳定风险。
 - NULL hash 单独混入常量，但 equality 仍调用 `Value::compare`，未先按 `is_null` 建模。NULL 行去重正确性依赖底层 payload，不能视为严格 SQL 语义。
 - DISTINCT 使用内存 `seen_keys_`，没有 spill；结果很大时会占用大量内存。
+- DATE 的 hash 分支调用 `Value::get_int()`，但该函数对 DATE 返回 0，所以所有 DATE 都会落入同一类 hash 贡献。相等值仍能进入同一桶，通常不直接破坏正确性，但会造成严重碰撞，也说明 DATE 的取值接口没有统一。
 
 ### 老师追问与参考回答
 
@@ -503,6 +506,10 @@ SELECT DISTANCE(STRING_TO_VECTOR('[1,2]'),
 
 ### 实现边界
 
+- 官方附录规定无括号 `VECTOR` 的默认维度是 2048；当前 grammar 却把它设成 1 维。`CREATE TABLE t(v VECTOR)` 因此与题面不符。
+- 官方最大维度为 16383；当前 `Table::create` 按约 16000 维做上限检查，16001～16383 的合法定义会被拒绝。
+- 官方附录接受 `TO_VECTOR()`、`FROM_VECTOR()` 和 `VECTOR_DISTANCE()` 同义词；当前 binder 只识别 `STRING_TO_VECTOR`、`VECTOR_TO_STRING` 和 `DISTANCE`，这些同义词没有实现。
+- 官方只允许 VECTOR 做相等性比较，不支持其它比较；当前 `VectorType::compare` 实现了按长度、再逐元素的字典序，因此 `<、<=、>、>=` 也可能被执行。这是“底层 comparator 存在”泄漏成 SQL 语义的典型问题。
 - 空向量 `[]` 被解析器拒绝；字符串必须以 `[` 开始、`]` 结束。但 token 只要求能读出一个 float，类似 `[1x]` 可能被接受，缺少“完整 token 消费”、有限值检查和严格错误报告。
 - 表列长度与插入 vector 长度不一致会报 `VECTOR_DIM_MISMATCH`；两个距离参数长度不一致返回 `VECTOR_LENGTG_ARE_INCONSISTENT`。
 - `STRING_TO_VECTOR(NULL)` 与 `VECTOR_TO_STRING(NULL)` 返回 NULL；距离任一参数 NULL 也返回 NULL。

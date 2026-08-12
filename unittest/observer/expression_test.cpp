@@ -14,12 +14,38 @@ See the Mulan PSL v2 for more details. */
 
 #include <memory>
 
+#include "sql/builtin/builtin.h"
 #include "sql/expr/expression.h"
 #include "sql/expr/tuple.h"
 #include "gtest/gtest.h"
 
 using namespace std;
 using namespace common;
+
+TEST(Builtin, date_format_zero_pads_early_years)
+{
+  struct TestCase
+  {
+    const char *date;
+    const char *expected;
+  };
+
+  const TestCase cases[] = {
+      {"0001-01-01", "0001-01-01 01"},
+      {"0099-01-01", "0099-01-01 99"},
+      {"0999-01-01", "0999-01-01 99"},
+      {"2000-01-01", "2000-01-01 00"},
+  };
+
+  for (const TestCase &test_case : cases) {
+    std::vector<Value> args;
+    args.emplace_back(test_case.date);
+    args.emplace_back("%Y-%m-%d %y");
+    Value result;
+    ASSERT_EQ(RC::SUCCESS, builtin::date_format(args, result));
+    EXPECT_EQ(test_case.expected, result.to_string());
+  }
+}
 
 TEST(ArithmeticExpr, test_value_type)
 {

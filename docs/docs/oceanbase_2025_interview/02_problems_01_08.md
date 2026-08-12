@@ -8,7 +8,7 @@
 
 ```text
 客户端请求
-  -> SessionStage
+  -> Communicator / SqlTaskHandler
   -> ParseStage：词法/语法树
   -> ResolveStage：表、列、表达式绑定
   -> OptimizeStage：逻辑计划、改写、物理计划
@@ -16,12 +16,14 @@
   -> SqlResult：open/next/close，事务提交或回滚
 ```
 
-- [session_stage.cpp](../../../src/observer/session/session_stage.cpp#L80) 串起 query cache、parse、resolve、optimize、execute。
+- [sql_task_handler.cpp](../../../src/observer/net/sql_task_handler.cpp#L21) 是当前网络请求的真实入口，`handle_sql` 串起 query cache、parse、resolve、optimize、execute。
 - [optimize_stage.cpp](../../../src/observer/sql/optimizer/optimize_stage.cpp#L32) 负责逻辑计划、rewrite、物理计划。
 - [execute_stage.cpp](../../../src/observer/sql/executor/execute_stage.cpp#L32) 区分“有物理计划的 DML/查询”和“直接命令执行的 DDL”。
 - [sql_result.cpp](../../../src/observer/sql/executor/sql_result.cpp#L25) 打开物理算子并在非显式多语句事务中自动提交。
 
 一个适合面试的总回答是：解析只回答“用户写了什么”，绑定回答“每个名字指向什么”，逻辑计划回答“要做哪些关系运算”，物理计划回答“用什么算法做”，算子迭代器最后才真正读写记录。
+
+[`SessionStage::handle_request/handle_sql`](../../../src/observer/session/session_stage.cpp#L34) 是保留的旧路径，源码标有 `TODO remove me`；当前 `SqlTaskHandler` 只调用 `SessionStage::handle_request2` 设置会话上下文，不通过它执行 SQL 各阶段。
 
 ## 1. basic
 
@@ -43,9 +45,9 @@
 
 以 `SELECT id FROM t WHERE id = 1` 为例：
 
-1. [session_stage.cpp](../../../src/observer/session/session_stage.cpp#L80) 创建并推进 SQL 事件。
+1. [sql_task_handler.cpp](../../../src/observer/net/sql_task_handler.cpp#L21) 读取请求、建立 SQL 事件并推进各阶段。
 2. parser 生成语法节点，resolve 阶段调用 `SelectStmt::create`；[select_stmt.cpp](../../../src/observer/sql/stmt/select_stmt.cpp#L34) 收集 FROM 表、别名、投影表达式和 WHERE。
-3. [logical_plan_generator.cpp](../../../src/observer/sql/optimizer/logical_plan_generator.cpp#L328) 生成 `TableGet -> Predicate -> Project` 的逻辑树。
+3. [logical_plan_generator.cpp](../../../src/observer/sql/optimizer/logical_plan_generator.cpp#L328) 生成以 Project 为根的 `Project(Predicate(TableGet))` 逻辑树。
 4. [physical_plan_generator.cpp](../../../src/observer/sql/optimizer/physical_plan_generator.cpp#L152) 查看谓词，若发现单列等值索引则生成 IndexScan，否则生成 TableScan。
 5. 扫描器逐条产生 tuple，过滤谓词，Project 输出列；结果由 [sql_result.cpp](../../../src/observer/sql/executor/sql_result.cpp#L61) 逐条拉取。
 
@@ -97,7 +99,7 @@ SELECT name FROM t WHERE id = 1;
 
 ### 题目目标
 
-实现 `UPDATE t SET col = expr [WHERE predicate]`，支持有条件和无条件更新、单字段或多字段更新，并正确维护索引和事务。
+题面要求实现 `UPDATE t SET col = expr [WHERE predicate]`，只要求单字段 SET，并支持有条件和无条件更新、索引维护。当前源码额外扩展为多个 SET 子句，但扩展能力也必须满足逐行求值和事务正确性。
 
 ### 必要原理
 
@@ -278,6 +280,7 @@ SELECT birthday FROM t WHERE birthday < '2039-01-01';
 ### 当前实现边界
 
 - [utils.cpp](../../../src/observer/common/utils.cpp#L31) 的 `parse_date` 使用 `sscanf("%d-%d-%d")`，不检查尾随字符，因此类似 `2024-1-1abc` 可能被接受。
+- 同一解析方式也不强制 `YYYY-MM-DD` 的固定宽度，`2024-1-1` 会被当成合法日期。若测评要求规范格式，应使用 `%n` 或手写 parser 确认整串消费及位数。
 - parser 本身只创建 CHARS；非法日期往往在 `make_record` 的类型转换阶段才失败。
 - [date_type.h](../../../src/observer/common/type/date_type.h#L27) 声明 DATE→INT 的 cast cost，但 DateType 没有实现对应 `cast_to`；而 `Value::get_int/get_float/get_boolean` 对 DATE 返回 0，不能把 DATE 当普通数值参与算术。
 - DATE_FORMAT 当前还允许 CHARS 输入，见第 7 题；题面主要要求 DATE。
@@ -471,7 +474,8 @@ Binder 分别绑定字段和函数；每行先求 `name/score/u_date`，LENGTH �
 - DATE_FORMAT [builtin.cpp](../../../src/observer/sql/builtin/builtin.cpp#L199) 接受 DATE 或 CHARS，虽然题目主要要求 DATE。
 - 题目要求的 `%Y/%y/%m/%d/%D/%M` 已实现，同时额外实现 `%c/%e`。
 - 未知 `%z/%n` 的实现是追加 `z/n`，即去掉百分号，符合题面示例；结尾孤立 `%` 会走普通字符分支，原样输出 `%`。
-- `%Y` 使用 `std::to_string(year)`，年份 1 会输出 `1`，不是严格四位 `0001`；`%y` 也假定年份字符串至少四位。
+- 这里存在题面文字与示例冲突：文字称“非法格式符原样输出”，按字面应得到 `%z`；示例却输出 `z`。当前实现选择跟随示例，文档和面试回答都应明确这一点。
+- `%Y` 使用 `std::to_string(year)`，年份 1 会输出 `1`，不是严格四位 `0001`；`%y` 直接对该字符串执行 `substr(2, 2)`，年份少于三位时会抛 `std::out_of_range`，异常未捕获会终止 observer。这是崩溃级边界，不只是格式不兼容。
 - 函数参数的类型主要由 builtin 运行期检查，普通函数 binder 没有完整签名校验。
 
 ### 老师可能追问与参考回答

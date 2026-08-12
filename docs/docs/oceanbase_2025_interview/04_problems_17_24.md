@@ -67,6 +67,8 @@ LIMIT 1;
 
 精确检索（exact search）和 IVF（近似最近邻索引）必须分开理解：前者扫描所有向量，后者只扫描少量桶，速度更快但可能漏掉真正最近邻。
 
+赛题完成度应优先按无索引路径判断。IVF 是当前仓库的扩展功能，不是第 18 题正文的必做项；分析 IVF 的缺陷不能否定精确检索主路径，也不能用“实现了 IVF”代替对精确结果正确性的验证。
+
 ### 必要原理
 
 - L2：`sqrt(sum((a[i]-b[i])^2))`，越小越近。
@@ -96,8 +98,12 @@ IVF 的数据结构是中心点 `centroids_` 和每个中心的 `(vector, RID)` 
 
 ### 边界与缺陷
 
-- 已修复的 IVF 问题：inner product 按分数降序选候选；`probes` 会 clamp 到实际中心数；空索引首次插入会初始化中心/bucket；`delete_entry` 会按 RID 移除条目。
-- `IndexMeta` 现在持久化 distance/lists/probes，[`Table::open`](../../../src/observer/storage/table/table.cpp) 能识别 IVF 元数据并扫描表记录重建内存索引，不再当作 B+Tree 打开不存在的文件。旧元数据缺少这些字段时用 L2/lists=1/probes=1 兼容重建。
+- 无索引 exact 路径使用完整排序，而不是 top-k heap；语义直接，但时间为 `O(N log N)`，没有利用 LIMIT 降到 `O(N log k)`。
+- IVF 对 inner product 把“分数更大”视为更优，但优化器只重写 `ORDER BY distance ASC LIMIT n`。因此 `DISTANCE(..., 'DOT') ASC` 的精确路径会取较小点积，IVF 路径却返回较大点积，重写前后语义不一致。
+- `VectorScanPhysicalOperator::open` 不重置 `cnt_`，`close` 也不重置；同一物理计划对象 reopen 后可能直接 EOF 或少返回行。
+- IVF 先只取 `limit` 个 RID，再做 predicate 和 MVCC 可见性过滤。如果候选中有不可见版本或被过滤的行，算子不会继续向索引索取后续候选，可能返回少于 LIMIT 的行，也可能漏掉下一条可见近邻。
+- `probes` 会 clamp 到实际中心数；空索引首次插入会初始化中心/bucket；`delete_entry` 会按 RID 移除条目。这些局部路径已经具备，但中心不会因持续插入/删除自动重训练，索引质量会逐渐漂移。
+- `IndexMeta` 持久化 distance/lists/probes，[`Table::open`](../../../src/observer/storage/table/table.cpp) 会扫描表记录重建内存索引；向量索引本体仍不持久化，重启成本为全表重建。旧元数据缺字段时按 L2/lists=1/probes=1 兼容。
 
 ### 老师追问与参考回答
 
@@ -193,7 +199,7 @@ COMMIT;  -- 新版本 __trx_xid_begin、旧版本 __trx_xid_end 变为 commit xi
 
 ### 边界与缺陷
 
-- 没有 UPDATE transaction log。日志操作枚举只有 INSERT/DELETE/COMMIT/ROLLBACK：[`mvcc_trx_log.cpp`](../../../src/observer/storage/trx/mvcc_trx_log.cpp#L26-L35)；`MvccTrx::update_record` 也不追加 update log。崩溃恢复不能完整地 redo/undo UPDATE。
+- 内存事务操作列表已经有 `Operation::Type::UPDATE`，所以正常运行时 commit/rollback 能处理旧、新版本；但**持久化事务日志**没有 UPDATE 记录。日志操作枚举只有 INSERT/DELETE/COMMIT/ROLLBACK：[`mvcc_trx_log.cpp`](../../../src/observer/storage/trx/mvcc_trx_log.cpp#L26-L35)，`MvccTrx::update_record` 也不追加 update log，崩溃恢复不能完整 redo/undo UPDATE。
 - MVCC UPDATE 调 `table->insert_record(new_record)`，并未移除旧版普通索引 entry：[`mvcc_trx.cpp`](../../../src/observer/storage/trx/mvcc_trx.cpp#L239-L261)。正确性主要靠读时过滤，且没有 GC：[`mvcc_trx.h`](../../../src/observer/storage/trx/mvcc_trx.h#L62-L67)。
 - SET 表达式只以 `records_.front()` 计算一次：[`update_physical_operator.cpp`](../../../src/observer/sql/operator/update_physical_operator.cpp#L69-L134)。因此 `SET c=c+1` 可能把所有命中行设成第一行计算出的同一值，而不是逐行求值。
 - operator 先 materialize 所有候选 record：[`update_physical_operator.cpp`](../../../src/observer/sql/operator/update_physical_operator.cpp#L34-L59)，大 UPDATE 有内存压力。
@@ -298,6 +304,8 @@ DELETE FROM v WHERE id=1;
 - 它遍历含系统列的 `field_metas`，却按逻辑字段下标访问 `field_index_`：[`view.cpp`](../../../src/observer/storage/table/view.cpp#L270-L275)，存在索引约定错误/越界风险。
 - 重启时 `init_member` 只按字段名在基表中找第一个匹配，忽略 table alias；两表都有 `id` 时会错映射：[`view.cpp`](../../../src/observer/storage/table/view.cpp#L431-L453)。
 - 多表 INSERT 即使前置检查通过，若后续某基表插入失败，前面已插的表不会补偿：[`view.cpp`](../../../src/observer/storage/table/view.cpp#L181-L239)。
+- `View::insert_record` 用“某基表至少收到一个非 NULL 值”决定是否向该表插入。若用户显式向视图列写 NULL，或者该基表映射列全为 NULL，本应由基表的 nullable/default 规则决定成败，当前实现却可能直接跳过整张基表。
+- 视图定义写入 data 文件时可以包含换行，但重启加载只用一次 `getline` 读取第一行。多行 `CREATE VIEW ... AS SELECT ...` 在创建后可能可用，重启后会因定义被截断而解析失败。
 
 ### 老师追问与参考回答
 
@@ -358,6 +366,7 @@ DML 时，普通插入会经 `insert_entry_of_indexes` 调用 `add_document`；�
 - `search_with_scores` 过滤掉 `score <= 0`：[`fulltext_index.cpp`](../../../src/observer/storage/index/fulltext_index.cpp#L255-L295)，如果这条路径被使用，负 IDF epsilon 的合法结果会被丢弃。但全仓当前没有该函数的查询调用者，现行 MATCH 路径直接调用 `calculate_bm25`，因此这是死代码风险，不是当前查询路径的现行 bug。
 - MVCC UPDATE 新插一个版本但不会 remove 旧版本的全文文档；旧版本继续污染 N、df、avgdl。重启重建又以 null trx 扫描所有物理版本：[`table.cpp`](../../../src/observer/storage/table/table.cpp#L277-L323)。
 - 通用 DROP INDEX 只从普通 `indexes_` 找索引，全文索引只在 `fulltext_indexes_`，因此 fulltext drop 路径不完整：[`table.cpp`](../../../src/observer/storage/table/table.cpp#L1421-L1468)。
+- 如果所有已索引文档分词后长度都是 0，`avgdl` 为 0；BM25 长度归一化会出现 `0/0`，可能产生 NaN。空文档语料需要显式定义分数和分母保护。
 - jieba 用默认构造和 `__FILE__` 寻找字典，未显式固定题目部署词典；又用 private accessor 取私有 stopword 成员：[`jieba_util.cpp`](../../../src/observer/common/fulltext/jieba_util.cpp#L13-L40) 和 [`jieba_util.cpp`](../../../src/observer/common/fulltext/jieba_util.cpp#L80-L90)。这对 cppjieba 版本/路径非常脆弱。
 
 ### 老师追问与参考回答

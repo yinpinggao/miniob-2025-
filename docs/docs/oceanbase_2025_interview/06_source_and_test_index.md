@@ -1,5 +1,7 @@
 # 24 题源码索引与实测证据
 
+本页测试基线为 2026-08-11、`main@2e609ac529`。结果只证明该基线和当前容器中的行为，不能自动外推到后续提交或官方测评环境。
+
 ## 1. 公共入口索引
 
 | 层次 | 入口源码 | 作用 |
@@ -32,7 +34,7 @@
 | 13 | null | [base_table.cpp](../../../src/observer/storage/table/base_table.cpp)、[value.cpp](../../../src/observer/common/value.cpp)、[expression.cpp](../../../src/observer/sql/expr/expression.cpp) |
 | 14 | union | [union_physical_operator.cpp](../../../src/observer/sql/operator/union_physical_operator.cpp)、[logical_plan_generator.cpp](../../../src/observer/sql/optimizer/logical_plan_generator.cpp) |
 | 15 | order-by | [order_by_physical_operator.cpp](../../../src/observer/sql/operator/order_by_physical_operator.cpp)、[limit_physical_operator.cpp](../../../src/observer/sql/operator/limit_physical_operator.cpp) |
-| 16 | vector-basic | [vector_type.cpp](../../../src/observer/common/type/vector_type.cpp)、[builtin.cpp](../../../src/observer/sql/builtin/builtin.cpp)、[base_table.cpp](../../../src/observer/storage/table/base_table.cpp) |
+| 16 | vector-basic | [yacc_sql.y](../../../src/observer/sql/parser/yacc_sql.y)、[vector_type.cpp](../../../src/observer/common/type/vector_type.cpp)、[builtin.cpp](../../../src/observer/sql/builtin/builtin.cpp)、[base_table.cpp](../../../src/observer/storage/table/base_table.cpp) |
 | 17 | text | [page.h](../../../src/observer/storage/buffer/page.h#L26)、[base_table.cpp](../../../src/observer/storage/table/base_table.cpp)、[text_type.cpp](../../../src/observer/common/type/text_type.cpp) |
 | 18 | vector-search | [vector_index_scan_rewrite.cpp](../../../src/observer/sql/optimizer/vector_index_scan_rewrite.cpp)、[vector_scan_physical_operator.cpp](../../../src/observer/sql/operator/vector_scan_physical_operator.cpp)、[ivfflat_index.cpp](../../../src/observer/storage/index/ivfflat_index.cpp) |
 | 19 | alter | [alter_table_stmt.cpp](../../../src/observer/sql/stmt/alter_table_stmt.cpp)、[alter_table_executor.cpp](../../../src/observer/sql/executor/alter_table_executor.cpp)、[table.cpp](../../../src/observer/storage/table/table.cpp#L701) |
@@ -46,25 +48,41 @@
 
 ### 完整构建
 
-当前源码已经通过完整构建：
+2026-08-11 在当前容器从空构建目录执行：
 
 ```text
-cmake --build build_debug -j2
+bash build.sh debug --make -j2
 ```
+
+Debug 全量构建成功，生成 observer、工具和 29 个 CTest 测试目标。构建开启 ASAN；存在若干 signed/unsigned 比较 warning，但没有编译错误。
 
 ### C++ 单元测试
 
-第一次测试受到容器内 LeakSanitizer 环境限制。设置：
+LeakSanitizer 在当前执行环境不可用，因此设置：
 
 ```text
 ASAN_OPTIONS=detect_leaks=0
 ```
 
-后，确认 27 项测试通过。最后一个长耗时日志测试等待较久后被终止，因此不能写成“28/28 全部通过”，也不能据此断言最后一项失败。
+本次共有 29 个 CTest：
+
+- #1～#17 全部通过；
+- #19～#29 全部通过；
+- #18 `disk_log_handler_test` 在 `test_append_and_wait` 中运行超过 60 秒后由 `timeout` 终止，未得到通过或失败结论。
+
+因此准确表述是：**28/29 个测试已确认通过，1 个长耗时测试未完成**。不能写成“29/29 全部通过”，也不能把超时直接断言为功能失败。
+
+可用下面的拆分命令复现这一结论：
+
+```text
+env ASAN_OPTIONS=detect_leaks=0 ctest --test-dir build_debug -I 1,17 --output-on-failure
+env ASAN_OPTIONS=detect_leaks=0 timeout 60s build_debug/bin/disk_log_handler_test
+env ASAN_OPTIONS=detect_leaks=0 ctest --test-dir build_debug -I 19,29 --output-on-failure
+```
 
 ### SQL Harness
 
-已在当前容器重试完整 SQL harness，并分别在受限沙箱内外执行。两次都在进入测试套件前停于 [`miniob_test.py`](../../../test/case/miniob_test.py#L1113) 的 `os.setpgrp()`，返回 `PermissionError: [Errno 1] Operation not permitted`。因为脚本在创建 server/socket 之前就退出，本次不能再把 Unix/TCP socket 权限写成已确认的当前阻塞。
+2026-08-11 在当前容器重试完整 SQL harness，并显式使用 TCP 模式。脚本仍在进入测试套件前停于 [`miniob_test.py`](../../../test/case/miniob_test.py#L1113) 的 `os.setpgrp()`，返回 `PermissionError: [Errno 1] Operation not permitted`。因为脚本在创建 server/socket 之前就退出，本次不能把 Unix/TCP socket 或 observer 本身写成已确认阻塞。
 
 因此仍使用 `observer -P cli` 做针对性 SQL 验证。测试数据位于 `/tmp`，没有修改项目源码和仓库数据。
 
@@ -180,6 +198,69 @@ where id not in (select g from t_null where id=1);
 ### 4.10 全文 DELETE 后统计没有正确维护
 
 针对性验证中，删除全文文档前后，保留文档的 score 没有按预期变化。结合源码可确认普通 DELETE 没有完整执行 `remove_document`，BM25 的 N、df、平均文档长度会失真。
+
+### 4.11 VECTOR 默认维度和官方同义词不符合附录
+
+```sql
+create table v_default(id int, v vector);
+insert into v_default values(1, string_to_vector('[1]'));
+select vector_to_string(v) from v_default;
+select to_vector('[1]');
+select vector_distance(string_to_vector('[1]'), string_to_vector('[2]'), 'EUCLIDEAN');
+```
+
+实际行为：1 维向量插入成功并输出 `[1.00000e+00]`，`TO_VECTOR` 和 `VECTOR_DISTANCE` 返回 FAILURE。源码也显示无括号 VECTOR 长度被设为一个 float，而不是官方默认的 2048 个 float。
+
+另外，下面的查询会返回 id=1，说明非等值 VECTOR 比较也被执行：
+
+```sql
+insert into v_default values(2, string_to_vector('[2]'));
+select id from v_default where v < string_to_vector('[2]');
+```
+
+### 4.12 IVF 的 DOT 重写改变查询结果
+
+完整复现 SQL：
+
+```sql
+create table vdot(id int, v vector(1));
+insert into vdot values
+  (1, string_to_vector('[1]')),
+  (2, string_to_vector('[2]'));
+
+select id from vdot
+order by distance(v, string_to_vector('[0.5]'), 'DOT') asc
+limit 1;
+
+create vector index vi_dot on vdot(v)
+with(type=ivfflat, distance=inner_product, lists=1, probes=1);
+
+select id from vdot
+order by distance(v, string_to_vector('[0.5]'), 'DOT') asc
+limit 1;
+```
+
+第一次返回 id=1。创建 INNER_PRODUCT IVF 索引后，同一句 SQL 返回 id=2，`EXPLAIN` 显示 `VECTOR_INDEX_SCAN`。根因是 SQL 指定 ASC，而 IVF 对 inner product 选择更大分数，优化器重写前后不等价。
+
+### 4.13 向可空单表视图插入 NULL 被静默跳过
+
+```sql
+create table view_base(id int null);
+create view view_null as select id from view_base;
+insert into view_null(id) values(null);
+select count(*) from view_base;
+```
+
+INSERT 返回 SUCCESS，但基表 `COUNT(*)` 为 0。源码用“至少有一个非 NULL 映射值”决定是否向基表插入，导致显式 NULL 行没有落到基表。
+
+### 4.14 DATE_FORMAT 的早期年份 `%y` 会终止进程
+
+```sql
+select date_format('0001-01-01', '%Y');
+select date_format('0001-01-01', '%y');
+```
+
+第一句输出 `1`，没有补成 `0001`；第二句在 `std::string::substr(2, 2)` 抛出 `std::out_of_range`，异常未捕获，observer 终止。正确实现应先按四位年份格式化，再取后两位，并保证 SQL 输入不能让 C++ 异常越过执行器边界。
 
 ## 5. 如何使用这份索引追源码
 

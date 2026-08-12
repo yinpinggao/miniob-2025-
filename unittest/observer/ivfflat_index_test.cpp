@@ -13,7 +13,18 @@ See the Mulan PSL v2 for more details. */
 #include <gtest/gtest.h>
 #include <json/value.h>
 
+#include "sql/optimizer/vector_index_scan_rewrite.h"
 #include "storage/index/ivfflat_index.h"
+
+TEST(VectorIndexScanRewrite, preserves_order_by_direction)
+{
+  EXPECT_TRUE(VectorIndexScanRewrite::is_order_compatible(NormalFunctionType::L2_DISTANCE, true));
+  EXPECT_FALSE(VectorIndexScanRewrite::is_order_compatible(NormalFunctionType::L2_DISTANCE, false));
+  EXPECT_TRUE(VectorIndexScanRewrite::is_order_compatible(NormalFunctionType::COSINE_DISTANCE, true));
+  EXPECT_FALSE(VectorIndexScanRewrite::is_order_compatible(NormalFunctionType::COSINE_DISTANCE, false));
+  EXPECT_FALSE(VectorIndexScanRewrite::is_order_compatible(NormalFunctionType::INNER_PRODUCT, true));
+  EXPECT_TRUE(VectorIndexScanRewrite::is_order_compatible(NormalFunctionType::INNER_PRODUCT, false));
+}
 
 TEST(IndexMeta, vector_configuration_round_trip)
 {

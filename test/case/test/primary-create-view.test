@@ -1,0 +1,11 @@
+-- echo 1. insert explicit null through a nullable view
+CREATE TABLE view_nullable_base(id int null);
+CREATE VIEW view_nullable AS SELECT id FROM view_nullable_base;
+INSERT INTO view_nullable(id) VALUES(NULL);
+SELECT COUNT(*) FROM view_nullable_base;
+
+-- echo 2. let base table constraints reject null
+CREATE TABLE view_not_null_base(id int not null);
+CREATE VIEW view_not_null AS SELECT id FROM view_not_null_base;
+INSERT INTO view_not_null(id) VALUES(NULL);
+SELECT COUNT(*) FROM view_not_null_base;

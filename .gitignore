@@ -36,3 +36,6 @@ package-lock.json
 observer.log*
 *.log
 logs/
+
+# runtime database files
+db/

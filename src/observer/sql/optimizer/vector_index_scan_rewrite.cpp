@@ -17,6 +17,16 @@
 #include "sql/operator/table_get_logical_operator.h"
 #include "sql/optimizer/vector_index_scan_rewrite.h"
 
+bool VectorIndexScanRewrite::is_order_compatible(NormalFunctionType function_type, bool is_asc)
+{
+  switch (function_type) {
+    case NormalFunctionType::L2_DISTANCE:
+    case NormalFunctionType::COSINE_DISTANCE: return is_asc;
+    case NormalFunctionType::INNER_PRODUCT: return !is_asc;
+    default: return false;
+  }
+}
+
 RC VectorIndexScanRewrite::rewrite(std::unique_ptr<LogicalOperator> &oper, bool &change_made)
 {
   auto &child_opers = oper->children();
@@ -43,7 +53,7 @@ RC VectorIndexScanRewrite::rewrite(std::unique_ptr<LogicalOperator> &oper, bool 
 
     auto  act_orderby_oper = dynamic_cast<OrderByLogicalOperator *>(orderby_oper.get());
     auto &orderby_node     = act_orderby_oper->order_by();
-    if (orderby_node.size() != 1 || !orderby_node[0].is_asc) {
+    if (orderby_node.size() != 1) {
       return RC::SUCCESS;
     }
 
@@ -51,6 +61,9 @@ RC VectorIndexScanRewrite::rewrite(std::unique_ptr<LogicalOperator> &oper, bool 
     if (expr->type() == ExprType::NORMAL_FUNCTION) {
       auto func_expr = dynamic_cast<NormalFunctionExpr *>(expr.get());
       if (!func_expr->is_vector_distance_func()) {
+        return RC::SUCCESS;
+      }
+      if (!is_order_compatible(func_expr->function_type(), orderby_node[0].is_asc)) {
         return RC::SUCCESS;
       }
 

@@ -64,7 +64,7 @@ Trx → Table/Index/RecordManager/BufferPool
 - [ExecuteStage](../../../src/observer/sql/executor/execute_stage.cpp#L32)：处理部分直接执行的 SQL。
 - [SqlResult](../../../src/observer/sql/executor/sql_result.cpp#L25)：驱动物理查询计划并输出结果。
 
-`SessionStage::handle_request/handle_sql` 是保留的旧路径，源码已标注 `TODO remove me`，全仓没有实际调用者。当前网络请求到 parser 的真实入口是 [`SqlTaskHandler::handle_sql`](../../../src/observer/net/sql_task_handler.cpp#L58)，不是 `SessionStage::handle_sql`。
+`SessionStage::handle_request/handle_sql` 是保留的旧路径，源码已标注 `TODO remove me`；`handle_sql` 只被这个无生产调用者的旧 `handle_request` 使用。当前网络请求到 parser 的真实入口是 [`SqlTaskHandler::handle_sql`](../../../src/observer/net/sql_task_handler.cpp#L58)，不是 `SessionStage::handle_sql`。
 
 ## 3. Parser：先判断“这句话长什么样”
 
@@ -96,7 +96,7 @@ Resolver 和 ExpressionBinder 处理语义问题：
 - `student` 是否存在；
 - `student.id` 是否存在；
 - 没写表名前缀时，字段是否有歧义；
-- `score + 10` 两边的类型是否能做加法；
+- `score + 10` 的字段和常量如何绑定，并完成当前实现已有的部分类型推断/转换；
 - 子查询中的字段来自内层表还是外层表；
 - 函数名和参数如何绑定。
 
@@ -111,6 +111,8 @@ Resolver 和 ExpressionBinder 处理语义问题：
 - 其他具体语句对象
 
 这里可以把 `Stmt` 理解为“已经完成名称绑定和基本语义检查的 SQL”。
+
+需要注意，“完成绑定”不等于“完成了所有类型检查”。当前普通函数签名、部分算术操作数类型和若干类型转换仍会延迟到执行期才报错；面试时不要把 Binder 描述成完整的静态类型系统。
 
 表达式绑定入口见 [expression_binder.cpp](../../../src/observer/sql/parser/expression_binder.cpp)。
 
@@ -308,6 +310,8 @@ __trx_xid_end
 ```
 
 扫描到记录后，事务根据版本区间判断当前快照是否可见。UPDATE 不覆盖旧记录，而是让旧版本结束、插入一个新版本。
+
+这里实现的是教学型、基于事务号区间的简化 MVCC。它没有完整的隔离级别体系、写集验证、版本链索引和垃圾回收，不能直接等同于工业数据库的 Snapshot Isolation。
 
 关键入口见 [mvcc_trx.cpp](../../../src/observer/storage/trx/mvcc_trx.cpp)。
 
