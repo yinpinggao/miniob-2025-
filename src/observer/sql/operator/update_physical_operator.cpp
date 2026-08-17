@@ -15,6 +15,8 @@
 
 RC UpdatePhysicalOperator::open(Trx *trx)
 {
+  // 【赛题 2 update / 20 update-mvcc】UPDATE 是阻塞写算子：孩子先筛出所有
+  // 目标旧记录，open 阶段完成修改，next 不再产生数据行。
   if (children_.empty()) {
     return RC::SUCCESS;
   }
@@ -31,6 +33,7 @@ RC UpdatePhysicalOperator::open(Trx *trx)
 
   trx_ = trx;
 
+  // 先物化候选记录再更新，避免扫描过程中修改索引/记录导致游标失效、漏行或重复行。
   while (true) {
     rc = child->next();
     if (rc == RC::RECORD_EOF) {
@@ -66,6 +69,8 @@ RC UpdatePhysicalOperator::open(Trx *trx)
   const auto *table_fields = table_->table_meta().field_metas();
   tuple.set_schema(table_, table_fields);
 
+  // 注意：当前实现只基于 records_.front() 求值一次，随后复用结果；因此多行
+  // UPDATE SET c=c+1 存在语义缺陷。正确实现应对每个 old_record 重新求值。
   std::vector<Value> evaluated_values(values_.size());
   for (size_t idx = 0; idx < values_.size(); ++idx) {
     const FieldMeta &field_meta = field_metas_[idx];
@@ -168,6 +173,7 @@ RC UpdatePhysicalOperator::open(Trx *trx)
     Record rollback_old = old_record.clone();
     Record rollback_new = new_record.clone();
 
+    // VacuousTrx 原地更新；MvccTrx 则结束旧版本并插入新版本。
     rc = trx_->update_record(table_, old_record, new_record);
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to update record: %s", strrc(rc));
@@ -183,6 +189,8 @@ RC UpdatePhysicalOperator::open(Trx *trx)
 
 void UpdatePhysicalOperator::rollback()
 {
+  // 当前补偿会回滚整个事务，而不是只回滚本条 UPDATE；显式事务中这不是完整
+  // 的 statement savepoint 语义，是该实现值得面试时说明的边界。
   if (trx_ == nullptr) {
     return;
   }

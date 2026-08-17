@@ -33,6 +33,8 @@ OrderByPhysicalOperator::~OrderByPhysicalOperator()
 
 RC OrderByPhysicalOperator::fetch_and_sort_tables()
 {
+  // 【赛题 15 order-by】ORDER BY 必须先物化输入，再按多个排序键比较；
+  // 数据超过内存阈值时切换到外部排序。
   RC rc = RC::SUCCESS;
 
   sorted_entries_.clear();
@@ -87,6 +89,7 @@ RC OrderByPhysicalOperator::fetch_and_sort_tables()
 
 RC OrderByPhysicalOperator::open(Trx *trx)
 {
+  // ORDER BY 是阻塞算子：看到全部输入后才能确定第一条输出。
   RC rc = RC::SUCCESS;
   if (children_.size() != 1) {
     return RC::INTERNAL;
@@ -226,6 +229,7 @@ size_t OrderByPhysicalOperator::get_available_memory() const
 
 RC OrderByPhysicalOperator::external_sort_open(Trx *trx)
 {
+  // 外部排序把输入拆成内存可容纳的有序 runs，写临时文件后再多路归并。
   size_t memory_limit = get_available_memory();
 
   // 创建外部排序器

@@ -149,11 +149,23 @@ public:
   Trx()          = default;
   virtual ~Trx() = default;
 
+  /**
+   * DML 必须先经过事务层，而不应由 SQL 算子直接调用 Table：
+   * VacuousTrx 会简单转发为物理增删改；MvccTrx 则在转发前后维护版本字段、
+   * 操作列表和日志。这样上层算子不需要感知当前启用了哪一种事务实现。
+   */
   virtual RC insert_record(BaseTable *table, Record &record)                         = 0;
   virtual RC delete_record(BaseTable *table, Record &record)                         = 0;
   virtual RC update_record(BaseTable *table, Record &old_record, Record &new_record) = 0;
-  virtual RC visit_record(BaseTable *table, Record &record, ReadWriteMode mode)      = 0;
 
+  /**
+   * 扫描器取得物理记录后调用 visit_record 判断该版本对当前事务是否可见。
+   * READ_WRITE 还会进行并发写冲突检查；不可见记录返回 RECORD_INVISIBLE，
+   * 扫描器继续寻找下一条，而不是把它当作查询失败。
+   */
+  virtual RC visit_record(BaseTable *table, Record &record, ReadWriteMode mode) = 0;
+
+  // 自动提交模式由 SqlResult::close 收尾；显式 BEGIN/COMMIT 则跨多条 SQL。
   virtual RC start_if_need() = 0;
   virtual RC commit()        = 0;
   virtual RC rollback()      = 0;

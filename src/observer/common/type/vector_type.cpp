@@ -11,6 +11,8 @@
 
 int VectorType::compare(const Value &left, const Value &right) const
 {
+  // 【赛题 16 vector-basic】VECTOR 是定长 float 数组；维度必须一致，距离
+  // 计算应使用专门函数，不能把它当作普通字符串或标量数值处理。
   // 获取左向量和右向量的指针
   const float *left_data  = reinterpret_cast<const float *>(left.data());
   const float *right_data = reinterpret_cast<const float *>(right.data());

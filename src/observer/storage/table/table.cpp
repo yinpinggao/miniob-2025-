@@ -190,6 +190,8 @@ RC Table::create(Db *db, int32_t table_id, const char *path, const char *name, c
 
 RC Table::drop()
 {
+  // 【赛题 3 drop-table】DROP TABLE 需要同步脏页、关闭索引和 record handler，
+  // 清理内存索引，最后删除 data/index/meta 文件；不能只删除元数据文件。
   auto rc = sync();  // 刷新所有脏页
   if (rc != RC::SUCCESS) {
     return rc;
@@ -215,8 +217,7 @@ RC Table::drop()
   auto       table_name = name();
   error_code ec;
 
-  // IVF and full-text indexes are currently rebuilt from table data and do
-  // not own an index file. Only B+Tree indexes have a backing file to remove.
+  // IVF/全文索引当前主要由表数据重建，只有 B+Tree 持有独立索引文件。
   for (Index *index : indexes_) {
     if (index != nullptr && index->index_meta().index_type() == IndexType::BPlusTreeIndex) {
       auto index_name = index->index_meta().name();
@@ -422,6 +423,8 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
 
 RC Table::insert_record(Record &record)
 {
+  // 先写 heap/record file 获取 RID，再把 (index key, RID) 写入每一个索引。
+  // RID 是页号和槽号组成的物理地址，非覆盖索引查询命中后仍需据此回表。
   RC rc = RC::SUCCESS;
   rc    = record_handler_->insert_record(record.data(), table_meta_.record_size(), &record.rid());
   if (rc != RC::SUCCESS) {
@@ -431,6 +434,8 @@ RC Table::insert_record(Record &record)
 
   rc = insert_entry_of_indexes(record.data(), record.rid());
   if (rc != RC::SUCCESS) {  // 可能出现了键值重复
+    // 任一索引失败（典型情况是 UNIQUE 冲突）时执行补偿：删除可能已写入的
+    // 索引项，再删除刚插入的记录。这里是手工原子性补偿，并非完整 WAL 事务。
     RC rc2 = delete_entry_of_indexes(record.data(), record.rid(), false /*error_on_not_exists*/);
     if (rc2 != RC::SUCCESS) {
       LOG_ERROR("Failed to rollback index data when insert index entries failed. table name=%s, rc=%d:%s",
@@ -906,6 +911,8 @@ RC Table::rewrite_table_storage(TableMeta &new_meta,
 
 RC Table::alter_add_column(const AttrInfoSqlNode &attr_info)
 {
+  // 【赛题 19 alter】固定长度记录增加字段会改变 record_size/offset，因此需要
+  // 构造新 TableMeta、重写全部旧记录并重建索引，而非只修改一份 JSON 元数据。
   if (table_meta_.field(attr_info.name.c_str()) != nullptr) {
     return RC::SCHEMA_FIELD_EXIST;
   }
@@ -936,6 +943,7 @@ RC Table::alter_add_column(const AttrInfoSqlNode &attr_info)
 
 RC Table::alter_drop_column(const std::string &column_name)
 {
+  // DROP COLUMN 同样需要重新布局后续字段；引用被删列的索引也必须一并移除。
   if (table_meta_.field(column_name.c_str()) == nullptr) {
     return RC::SCHEMA_FIELD_NOT_EXIST;
   }
@@ -988,6 +996,8 @@ RC Table::alter_drop_column(const std::string &column_name)
 
 RC Table::alter_change_column(const std::string &old_name, const std::string &new_name)
 {
+  // 仅改名时物理字节和 offset 不变，但表元数据与所有引用该列的索引元数据
+  // 必须保持一致。
   if (old_name == new_name) {
     return RC::SUCCESS;
   }
@@ -1047,6 +1057,8 @@ RC Table::alter_change_column(const std::string &old_name, const std::string &ne
 
 RC Table::alter_rename_table(const std::string &new_name)
 {
+  // RENAME 需要协调内存目录、meta/data/index 文件名和已打开句柄；当前切换流程
+  // 不是完整事务性 DDL，中途失败可能留下部分完成状态。
   if (table_meta_.name() == new_name) {
     return RC::SUCCESS;
   }
@@ -1576,6 +1588,8 @@ RC Table::delete_record(const RID &rid)
 
 RC Table::delete_record(const Record &record)
 {
+  // 物理删除必须先移除二级索引项，再删除 heap 中的记录；否则索引中会留下
+  // 指向不存在 RID 的悬空条目。MVCC 的逻辑删除通常不会立即走到这里。
   RC rc = RC::SUCCESS;
   for (Index *index : indexes_) {
     rc = index->delete_entry(record.data(), &record.rid());
@@ -1589,8 +1603,10 @@ RC Table::delete_record(const Record &record)
 
 RC Table::update_record(const Record &old_record, const Record &new_record)
 {
+  // 这是 VacuousTrx 使用的原地物理 UPDATE。若索引列发生变化，必须将旧 key
+  // 替换为新 key。MvccTrx 的 UPDATE 主要通过“旧版本失效 + 插入新版本”实现。
   RC rc = RC::SUCCESS;
-  // 维护索引，先删除后插入
+  // 先删除旧索引项，再插入新索引项；任何一步失败都尽力恢复旧状态。
   for (Index *index : indexes_) {
     rc = index->delete_entry(old_record.data(), &old_record.rid());
     ASSERT(RC::SUCCESS == rc,

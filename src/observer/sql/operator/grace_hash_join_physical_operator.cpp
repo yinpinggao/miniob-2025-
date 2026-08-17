@@ -81,6 +81,8 @@ RC GraceHashJoinPhysicalOperator::open(Trx *trx)
 
 RC GraceHashJoinPhysicalOperator::partition_phase()
 {
+  // 【赛题 24 big-order-by 扩展】Grace Hash Join 先按连接 key 将左右输入分区
+  // 落盘，再逐个同号分区连接，目标是避免笛卡尔中间结果全部驻留内存。
   // 分区左表
   RC rc = partition_input(left_, left_partition_files_);
   if (rc != RC::SUCCESS) {
@@ -204,6 +206,8 @@ RC GraceHashJoinPhysicalOperator::partition_input(PhysicalOperator *input, std::
 
 size_t GraceHashJoinPhysicalOperator::hash_tuple(const Tuple *tuple) const
 {
+  // 这里应基于等值连接 key 计算稳定哈希；若无法取得真实 join key 而固定落入
+  // 同一分区，算法会退化为落盘 Nested Loop，失去 Grace Hash Join 的意义。
   // 当前的 JOIN 逻辑是通过额外的 Predicate 算子来完成条件过滤，
   // 这里拿不到真正的等值连接键。如果继续按照整行内容做 hash，
   // 左右分区的 hash 值通常不同，会导致左右数据落在不同分区，

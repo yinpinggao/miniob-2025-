@@ -88,9 +88,13 @@ RC BplusTreeIndex::close()
 
 RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 {
+  // 从固定长度 Record 提取完整 key，再写入 B+Tree。叶子保存 key 与 RID，命中后
+  // 通常仍需根据 RID 回表读取完整记录（除非是覆盖索引）。
   std::unique_ptr<char[]> entry_guard(index_meta_.make_entry_from_record(record));
   char                   *entry = entry_guard.get();
   if (index_meta_.unique()) {
+    // UNIQUE 不能只看树中是否存在相同 key：MVCC 下旧版本可能不可见。因此先
+    // 取出候选 RID，再通过当前事务的 visit_record 判断是否真的冲突。
     list<RID> entries;
     RC        rc = index_handler_.get_entry(entry, index_meta_.fields_total_len(), entries);
     if (OB_FAIL(rc)) {
@@ -142,6 +146,8 @@ RC BplusTreeIndex::delete_entry(const char *record, const RID *rid)
 IndexScanner *BplusTreeIndex::create_scanner(
     const char *left_key, int left_len, bool left_inclusive, const char *right_key, int right_len, bool right_inclusive)
 {
+  // Scanner 接受左右边界和开闭区间，底层可支持等值/范围扫描；当前优化器主要
+  // 能为单列谓词构造搜索 key，复合索引的访问路径仍不完整。
   BplusTreeIndexScanner *index_scanner = new BplusTreeIndexScanner(index_handler_);
   RC rc = index_scanner->open(left_key, left_len, left_inclusive, right_key, right_len, right_inclusive);
   if (rc != RC::SUCCESS) {

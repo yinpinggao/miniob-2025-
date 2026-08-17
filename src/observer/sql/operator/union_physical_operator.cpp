@@ -68,6 +68,8 @@ size_t UnionPhysicalOperator::TupleDistinctKeyHash::operator()(const TupleDistin
 
 RC UnionPhysicalOperator::open(Trx *trx)
 {
+  // 【赛题 14 union】UNION ALL 直接串流两个分支；UNION 则把完整行写入
+  // seen_keys_ 去重。左右分支的输出列数必须一致。
   if (children_.size() != 2) {
     LOG_WARN("union operator expects exactly two children, got %zu", children_.size());
     return RC::INVALID_ARGUMENT;
@@ -95,6 +97,7 @@ RC UnionPhysicalOperator::open(Trx *trx)
 
 RC UnionPhysicalOperator::make_key(const Tuple &tuple, TupleDistinctKey &key) const
 {
+  // 去重粒度是完整行，NULL、浮点和向量都必须满足 hash 与 equality 一致性。
   key.values.clear();
   const int cell_num = tuple.cell_num();
   key.values.reserve(cell_num);
@@ -160,6 +163,7 @@ RC UnionPhysicalOperator::fetch_from_child(PhysicalOperator *child)
 
 RC UnionPhysicalOperator::next()
 {
+  // 按题面从左到右消费分支，左分支 EOF 后再切换到右分支。
   while (current_child_index_ < children_.size()) {
     PhysicalOperator *child = children_[current_child_index_].get();
     RC                rc    = fetch_from_child(child);

@@ -48,6 +48,9 @@ std::string PhysicalOperator::name() const { return physical_operator_type_name(
 std::string PhysicalOperator::param() const { return ""; }
 void        PhysicalOperator::set_parent_tuple(const Tuple *tuple)
 {
+  // Nested-loop apply 的参数传递方式：每处理一条外层记录，就把该 Tuple
+  // 递归设置到内层计划的所有算子。内层 TableScan/Predicate 可将它与当前
+  // 内层 Tuple 组合，从而计算 t2.id = t1.id 之类的相关条件。
   parent_tuple_ = tuple;
   for (auto &child : children_) {
     child->set_parent_tuple(tuple);

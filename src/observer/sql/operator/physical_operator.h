@@ -83,6 +83,13 @@ public:
 
   virtual PhysicalOperatorType type() const = 0;
 
+  /**
+   * Volcano/Iterator 模型的生命周期：
+   * open  自顶向下初始化孩子、扫描器和临时状态；
+   * next  每次产生一条 Tuple，RECORD_EOF 表示结束；
+   * next(Chunk) 是批量向量化版本；
+   * close 自顶向下释放资源，必须与 open 成对调用。
+   */
   virtual RC open(Trx *trx) = 0;
   virtual RC next() { return RC::UNIMPLEMENTED; }
   virtual RC next(Chunk &chunk) { return RC::UNIMPLEMENTED; }
@@ -92,12 +99,15 @@ public:
 
   virtual RC tuple_schema(TupleSchema &schema) const { return RC::UNIMPLEMENTED; }
 
+  // unique_ptr 表达算子树的独占所有权：父算子析构时递归释放所有孩子。
   void add_child(std::unique_ptr<PhysicalOperator> oper) { children_.emplace_back(std::move(oper)); }
+
+  // 相关子查询执行时，把当前外层行传递到整棵内层计划，供内层表达式引用。
   void set_parent_tuple(const Tuple *tuple);
 
   std::vector<std::unique_ptr<PhysicalOperator>> &children() { return children_; }
 
 protected:
   std::vector<std::unique_ptr<PhysicalOperator>> children_;
-  const Tuple                                   *parent_tuple_ = nullptr;  // 不相关子查询的时候使用
+  const Tuple                                   *parent_tuple_ = nullptr;  // 相关子查询引用外层行时使用
 };

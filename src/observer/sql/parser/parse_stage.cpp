@@ -29,6 +29,9 @@ using namespace common;
 
 RC ParseStage::handle_request(SQLStageEvent *sql_event)
 {
+  // ParseStage 类似编译器的词法/语法分析阶段：
+  // 输入是 SQL 字符串，输出是尚未绑定真实表和字段的 ParsedSqlNode。
+  // 例如这里能够识别 "id + 1" 是算术表达式，但不知道 id 属于哪张表。
   RC rc = RC::SUCCESS;
 
   SqlResult         *sql_result = sql_event->session_event()->sql_result();
@@ -36,6 +39,7 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
 
   ParsedSqlResult parsed_sql_result;
 
+  // parse 内部由 lex_sql.l 与 yacc_sql.y 生成的 lexer/parser 完成工作。
   parse(sql.c_str(), &parsed_sql_result);
   if (parsed_sql_result.sql_nodes().empty()) {
     sql_result->set_return_code(RC::SUCCESS);
@@ -43,6 +47,7 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
     return RC::INTERNAL;
   }
 
+  // Parser 可以解析多条 SQL，但当前请求处理链只执行第一条。
   if (parsed_sql_result.sql_nodes().size() > 1) {
     LOG_WARN("got multi sql commands but only 1 will be handled");
   }
@@ -62,6 +67,7 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
     return rc;
   }
 
+  // 所有权移入 SQLStageEvent，供 ResolveStage 消费，避免复制整棵语法树。
   sql_event->set_sql_node(std::move(sql_node));
 
   return RC::SUCCESS;

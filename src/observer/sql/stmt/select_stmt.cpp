@@ -34,6 +34,9 @@ SelectStmt::~SelectStmt()
 RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt,
     const std::unordered_map<std::string, BaseTable *> &parent_table_map)
 {
+  // 【赛题 12 alias / 11、21 sub-query】SelectStmt 将 FROM、投影、WHERE、
+  // GROUP/HAVING、ORDER/LIMIT 绑定到真实表和字段。parent_table_map 表示外层
+  // 查询作用域，使相关子查询能够引用外层表。
   if (nullptr == db) {
     LOG_WARN("invalid argument. db is null");
     return RC::INVALID_ARGUMENT;
@@ -59,7 +62,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt,
       LOG_WARN("no such table. db=%s, table_name=%s", db->name(), table_name);
       return RC::SCHEMA_TABLE_NOT_EXIST;
     }
-    // 建立别名
+    // 建立当前查询层的表名/别名映射。同层别名不能重复；字段绑定优先使用
+    // 用户写出的别名，输出列别名则主要交给 TupleCellSpec/Communicator 展示。
     auto &table_alias = select_sql.relations[i].alias;
     if (!table_alias.empty()) {
       const auto &success = temp_map.emplace(table_alias, table);

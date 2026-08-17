@@ -152,6 +152,8 @@ RC IvfflatIndex::close()
 RC IvfflatIndex::build_index(
     std::vector<std::pair<Vector, RID>> &initial_data, NormalFunctionType distance_fn, const std::vector<int> &options)
 {
+  // IVF 将向量聚类为 lists 个桶；查询只探测 probes 个最近桶，以召回率换速度。
+  // lists 越大桶越细，probes 越大召回率通常越高但计算量也越大。
   int lists  = options.size() >= 1 ? options[0] : 1;
   int probes = options.size() >= 2 ? options[1] : 1;
   if (lists <= 0 || probes <= 0) {
@@ -171,7 +173,7 @@ RC IvfflatIndex::build_index(
   std::mt19937                    gen(std::random_device{}());
   std::uniform_int_distribution<> dis(0, initial_data.size() - 1);
 
-  // 随机选择初始质心
+  // 当前使用随机初始质心并进行有限轮 Lloyd/k-means 更新，结果具有随机性。
   centroids_.resize(lists_);
   for (auto &centroid : centroids_) {
     centroid = initial_data[dis(gen)].first;

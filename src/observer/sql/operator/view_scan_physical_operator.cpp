@@ -21,6 +21,8 @@
 
 RC ViewScanPhysicalOperator::init()
 {
+  // 【赛题 22 create-view】View 不拥有独立数据文件；扫描视图时重新解析/绑定
+  // 保存的 SELECT，并生成一棵子查询物理计划。视图本质是命名查询。
   RC rc = RC::SUCCESS;
 
   auto select_sql = view_->select_sql();
@@ -97,6 +99,7 @@ RC ViewScanPhysicalOperator::open(Trx *trx)
 
 RC ViewScanPhysicalOperator::next()
 {
+  // 从视图 SELECT 的结果 Tuple 中映射出视图列，再应用下推到视图扫描上的谓词。
   RC rc = RC::SUCCESS;
 
   bool filter_result = false;

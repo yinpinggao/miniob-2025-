@@ -140,6 +140,8 @@ ComparisonExpr::~ComparisonExpr() = default;
 
 RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &result) const
 {
+  // 【赛题 13 null】普通比较遇到 NULL 返回 false，作为 WHERE 谓词时等价于
+  // UNKNOWN 被过滤；IS NULL/IS NOT NULL 则走专门的判断分支。
   if (comp_ == IS_OP) {
     if (right.attr_type() != AttrType::NULLS) {
       return RC::NOT_NULL_AFTER_IS;
@@ -220,6 +222,8 @@ RC ComparisonExpr::try_get_value(Value &cell) const
 
 RC ComparisonExpr::get_value(const Tuple &tuple, Value &value)
 {
+  // 【赛题 11 simple-sub-query / 21 complex-sub-query】比较表达式可包含标量
+  // 子查询、IN/NOT IN 或 EXISTS，结果通过内层物理算子迭代取得。
   RC    rc = RC::SUCCESS;
   Value left_value;
   Value right_value;
@@ -290,7 +294,8 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value)
     return RC::SUBQUERY_RETURNED_MULTIPLE_ROWS;
   }
 
-  // Handle IN and NOT IN operations
+  // IN/NOT IN 还要记录 RHS 是否含 NULL：无匹配但含 NULL 时是 UNKNOWN，
+  // 不能简单把 NOT IN 实现为所有比较结果取反。
   if (comp_ == IN_OP || comp_ == NOT_IN_OP) {
     if (left_value.is_null()) {
       // SQL UNKNOWN is represented as false in predicate evaluation.
@@ -488,6 +493,8 @@ AttrType ArithmeticExpr::value_type() const
 
 RC ArithmeticExpr::calc_value(const Value &left_value, const Value &right_value, Value &value) const
 {
+  // 【赛题 6 expression】递归表达式先得到左右 Value，再按运算符和数据类型
+  // 分派计算。标量与向量化 calc_column 必须保持相同的 NULL、除零和类型提升语义。
   RC rc = RC::SUCCESS;
   if (left_value.is_null() || right_value.is_null()) {
     value.set_null(true);
@@ -784,6 +791,7 @@ SubQueryExpr::~SubQueryExpr() = default;
 
 RC SubQueryExpr::generate_select_stmt(Db *db, const std::unordered_map<std::string, BaseTable *> &tables)
 {
+  // 子查询复用 SelectStmt::create；tables 把外层可见关系传入，用于相关字段绑定。
   // 仿照普通 select 的执行流程，tables 用来传递别名
   Stmt *stmt = nullptr;
   RC    rc   = SelectStmt::create(db, sql_node_, stmt, tables);
@@ -841,6 +849,8 @@ bool SubQueryExpr::one_row_ret() const { return res_query.size() <= 1; }
 // 子算子树的 open 和 close 逻辑由外部控制
 RC SubQueryExpr::open(Trx *trx, const Tuple &tuple)
 {
+  // 朴素相关子查询采用 nested-loop apply：外层每行都把 parent_tuple 传给
+  // 内层计划并重新 open；没有去相关时最坏复杂度约 O(N_outer*N_inner)。
   RC rc = RC::SUCCESS;
   physical_oper_->set_parent_tuple(&tuple);
   rc = physical_oper_->open(trx);
@@ -862,6 +872,7 @@ bool SubQueryExpr::has_more_row(const Tuple &tuple) const
 
 RC SubQueryExpr::get_value(const Tuple &tuple, Value &value)
 {
+  // 这里只拉取第一行第一列；调用者再探测第二行，标量子查询多行时返回错误。
   physical_oper_->set_parent_tuple(&tuple);
   RC rc = physical_oper_->next();
   if (rc == RC::RECORD_EOF) {

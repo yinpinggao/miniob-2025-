@@ -201,6 +201,12 @@ RC MvccTrx::delete_record(BaseTable *table, Record &record)
 RC MvccTrx::update_record(
     BaseTable *table, Record &old_record, Record &new_record)  // 涉及到update需要执行,提交前，还需要检测是否可见
 {
+  // MiniOB 的 MVCC UPDATE 不是原地覆盖用户字段，而是：
+  // 1. 将旧版本的 end_xid 标记为 -trx_id，表示“本事务准备结束它”；
+  // 2. 插入 begin_xid=-trx_id 的新版本；
+  // 3. COMMIT 时把两个负事务号替换为正式 commit_xid；
+  // 4. ROLLBACK 时删除新版本并恢复旧版本。
+  // 因而一次逻辑 UPDATE 会产生两个物理版本，索引扫描还需做可见性过滤。
   Field begin_field;
   Field end_field;
   trx_fields(table, begin_field, end_field);
@@ -210,6 +216,8 @@ RC MvccTrx::update_record(
   Record  old_version;
   Record  new_version;
 
+  // visit_record 在页内记录受保护的上下文中执行 lambda，避免检查可见性和
+  // 修改 end_xid 之间被其它线程插入竞争窗口。
   RC rc = table->visit_record(old_record.rid(),
       [this, table, &visit_result, &old_version, &end_field, &original_end_xid](Record &inplace_record) -> bool {
         RC visible_rc = this->visit_record(table, inplace_record, ReadWriteMode::READ_WRITE);
@@ -239,6 +247,8 @@ RC MvccTrx::update_record(
   begin_field.set_int(new_record, -trx_id_);
   end_field.set_int(new_record, trx_kit_.max_trx_id());
 
+  // 新版本获得新的 RID。Table::insert_record 同时维护所有普通索引；旧版本
+  // 的索引项暂时保留，依靠事务可见性过滤，代价是索引会随版本积累而膨胀。
   rc = table->insert_record(new_record);
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to insert new version while update. table=%s, rid=%s, rc=%s",
@@ -264,6 +274,9 @@ RC MvccTrx::update_record(
 
 RC MvccTrx::visit_record(BaseTable *table, Record &record, ReadWriteMode mode)
 {
+  // begin_xid/end_xid 是每条记录前部的隐藏事务字段：
+  // 正数表示已提交边界，负数表示对应事务尚未提交。
+  // 当前实现使用事务号近似快照时间，并采用较简单的冲突处理策略。
   Field begin_field;
   Field end_field;
   trx_fields(table, begin_field, end_field);
@@ -273,6 +286,7 @@ RC MvccTrx::visit_record(BaseTable *table, Record &record, ReadWriteMode mode)
 
   RC rc = RC::SUCCESS;
   if (begin_xid > 0 && end_xid > 0) {
+    // 已提交版本：当前事务号落在 [begin_xid, end_xid] 内时可见。
     if (trx_id_ >= begin_xid && trx_id_ <= end_xid) {
       rc = RC::SUCCESS;
     } else {
@@ -280,7 +294,7 @@ RC MvccTrx::visit_record(BaseTable *table, Record &record, ReadWriteMode mode)
       rc = RC::RECORD_INVISIBLE;
     }
   } else if (begin_xid < 0) {
-    // begin xid 小于0说明是刚插入而且没有提交的数据
+    // begin_xid < 0：某事务刚插入的新版本，只有创建者自己可见。
     if (-begin_xid == trx_id_) {
       rc = RC::SUCCESS;
     } else {
@@ -289,7 +303,7 @@ RC MvccTrx::visit_record(BaseTable *table, Record &record, ReadWriteMode mode)
       rc = RC::RECORD_INVISIBLE;
     }
   } else if (end_xid < 0) {
-    // end xid 小于0 说明是正在删除但是还没有提交的数据
+    // end_xid < 0：某事务正在删除/更新旧版本，但尚未提交。
     if (mode == ReadWriteMode::READ_ONLY) {
       // 如果 -end_xid 就是当前事务的事务号，说明是当前事务删除的
       if (-end_xid != trx_id_) {
@@ -300,9 +314,8 @@ RC MvccTrx::visit_record(BaseTable *table, Record &record, ReadWriteMode mode)
         rc = RC::RECORD_INVISIBLE;
       }
     } else {
-      // 如果当前想要修改此条数据，并且不是当前事务删除的，简单的报错
-      // 这是事务并发处理的一种方式，非常简单粗暴。其它的并发处理方法，可以等待，或者让客户端重试
-      // 或者等事务结束后，再检测修改的数据是否有冲突
+      // 写路径遇到其它事务正在结束该版本时直接报冲突。工业实现还可选择等待、
+      // 死锁检测、乐观校验或让客户端重试；这里采用最直接的 fail-fast 策略。
       if (-end_xid != trx_id_) {
         LOG_TRACE("concurrency conflit. someone is deleting this record right now. trx id=%d, begin xid=%d, end xid=%d",
                   trx_id_, begin_xid, end_xid);
@@ -349,6 +362,8 @@ RC MvccTrx::start_if_need()
 
 RC MvccTrx::commit()
 {
+  // 【赛题 20 update-mvcc】COMMIT 为本事务分配正式 commit_xid，并把记录中的
+  // -trx_id 标记转为正数边界，使新版本对后续事务可见、旧版本正式失效。
   int32_t commit_id = trx_kit_.next_trx_id();
   return commit_with_trx_id(commit_id);
 }
@@ -467,6 +482,8 @@ RC MvccTrx::commit_with_trx_id(int32_t commit_xid)
 
 RC MvccTrx::rollback()
 {
+  // ROLLBACK 按 operations_ 逆向补偿：删除未提交插入/新版本，恢复被删除或
+  // 被 UPDATE 结束的旧版本。当前没有版本 GC，提交后的历史版本会持续存在。
   RC rc    = RC::SUCCESS;
   started_ = false;
 

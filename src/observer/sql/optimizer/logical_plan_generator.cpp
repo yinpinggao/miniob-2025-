@@ -48,6 +48,9 @@ using namespace common;
 
 RC LogicalPlanGenerator::create(Stmt *stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
+  // 逻辑计划只表达关系语义，不指定具体扫描、排序或连接算法。
+  // 例如 TableGet 表示“读取关系”，到物理阶段才可能变成 TableScan、
+  // IndexScan、ViewScan 或 VectorIndexScan。
   RC rc = RC::SUCCESS;
   switch (stmt->type()) {
     case StmtType::CALC: {
@@ -100,6 +103,8 @@ RC LogicalPlanGenerator::create_plan(CalcStmt *calc_stmt, std::unique_ptr<Logica
 
 RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
+  // UNION/UNION ALL 按题面要求从左到右组合。每个 SELECT 分支先独立生成计划，
+  // 再用二叉 UnionLogicalOperator 把左侧累计结果与右侧分支连接起来。
   if (select_stmt->has_set_operations()) {
     unique_ptr<LogicalOperator> accumulated_plan;
     RC                          rc = create_single_select_plan(select_stmt, accumulated_plan);
@@ -137,14 +142,14 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
     return {};
   }
 
-  // 递归遍历 condition 检查所有子查询
+  // 递归遍历条件中的子查询，确保子查询也已生成可执行计划。
   rc = ExpressionIterator::condition_iterate_expr(filter_stmt->condition());
 
   if (OB_FAIL(rc)) {
     return rc;
   }
 
-  // 构建 ConjunctionExpr 并将其传递给 logical_operator
+  // WHERE 中的多个条件统一包装成 AND 表达式，由 Predicate 算子逐行判断。
   unique_ptr<ConjunctionExpr> conjunction_expr(
       new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(filter_stmt->condition())));
   logical_operator = std::make_unique<PredicateLogicalOperator>(std::move(conjunction_expr));
@@ -161,6 +166,8 @@ RC LogicalPlanGenerator::create_plan(InsertStmt *insert_stmt, unique_ptr<Logical
 
 RC LogicalPlanGenerator::create_plan(DeleteStmt *delete_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
+  // DELETE 的逻辑树形态：Delete -> [Predicate] -> TableGet(READ_WRITE)。
+  // READ_WRITE 让扫描器在取到记录时执行事务可见性与写冲突检查。
   BaseTable                  *table       = delete_stmt->table();
   FilterStmt                 *filter_stmt = delete_stmt->filter_stmt();
   unique_ptr<LogicalOperator> table_get_oper(new TableGetLogicalOperator(table, ReadWriteMode::READ_WRITE));
@@ -187,6 +194,8 @@ RC LogicalPlanGenerator::create_plan(DeleteStmt *delete_stmt, unique_ptr<Logical
 
 RC LogicalPlanGenerator::create_plan(UpdateStmt *update_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
+  // UPDATE 与 DELETE 类似，先由孩子算子确定候选旧记录，再由根 Update 算子
+  // 计算 SET 表达式并调用事务层写入新记录/新版本。
   auto  table       = update_stmt->table();
   auto &field_metas = update_stmt->field_metas();
   auto &values      = update_stmt->values();  // 支持了多个值
@@ -216,6 +225,7 @@ RC LogicalPlanGenerator::create_plan(UpdateStmt *update_stmt, unique_ptr<Logical
 
 RC LogicalPlanGenerator::create_plan(ExplainStmt *explain_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
+  // EXPLAIN 不执行子计划的数据操作，只遍历并打印生成的算子树结构。
   unique_ptr<LogicalOperator> child_oper;
 
   Stmt *child_stmt = explain_stmt->child();

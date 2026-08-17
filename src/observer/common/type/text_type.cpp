@@ -18,6 +18,8 @@
 
 int TextType::compare(const Value &left, const Value &right) const
 {
+  // 【赛题 17 text】当前 TEXT 仍按 C-string/定长内联字段处理，不是 locator +
+  // overflow pages 的通用 LOB；因此短文本也会占用 schema 预留的大块空间。
   ASSERT(left.attr_type() == AttrType::TEXTS && right.attr_type() == AttrType::TEXTS, "invalid type");
   return common::compare_string(
       (void *)left.value_.pointer_value_, left.length_, (void *)right.value_.pointer_value_, right.length_);

@@ -27,6 +27,8 @@ HashGroupByPhysicalOperator::HashGroupByPhysicalOperator(
 
 RC HashGroupByPhysicalOperator::open(Trx *trx)
 {
+  // 【赛题 10 group-by】阻塞聚合算子会先消费完孩子，再按 group key 累积
+  // Aggregator，最后逐组输出。名称虽叫 HashGroupBy，但 find_group 当前是线性查找。
   ASSERT(children_.size() == 1, "group by operator only support one child, but got %d", children_.size());
 
   groups_.clear();
@@ -49,7 +51,7 @@ RC HashGroupByPhysicalOperator::open(Trx *trx)
       return RC::INTERNAL;
     }
 
-    // 找到对应的group
+    // 先计算 group key，再把当前行交给 count/sum/avg/min/max 的中间状态。
     GroupType *found_group = nullptr;
     rc                     = find_group(*child_tuple, found_group);
     if (OB_FAIL(rc)) {
@@ -78,7 +80,7 @@ RC HashGroupByPhysicalOperator::open(Trx *trx)
     return rc;
   }
 
-  // 得到最终聚合后的值
+  // 输入耗尽后 finalize 每个 Aggregator；AVG 等在这里生成最终结果。
   for (GroupType &group : groups_) {
     GroupValueType &group_value = get<1>(group);
     rc                          = evaluate(group_value);
@@ -132,6 +134,7 @@ Tuple *HashGroupByPhysicalOperator::current_tuple()
 
 RC HashGroupByPhysicalOperator::find_group(const Tuple &child_tuple, GroupType *&found_group)
 {
+  // group key 使用 ValueListTuple 比较；NULL 的等价规则必须符合 SQL 分组语义。
   found_group = nullptr;
 
   RC rc = RC::SUCCESS;

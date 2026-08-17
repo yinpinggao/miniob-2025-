@@ -12,6 +12,8 @@ See the Mulan PSL v2 for more details. */
 
 RC IndexMeta::init(const char *name, IndexType index_type, const vector<FieldMeta> &fields, bool unique)
 {
+  // 【赛题 8 multi-index / 9 unique】复合索引 key 是多个字段原始字节按声明顺序
+  // 拼接而成；fields_offset_ 记录每列在 key 中的起点，total_len 是完整 key 长度。
   name_             = name;
   index_type_       = index_type;
   fields_total_len_ = 0;
@@ -19,6 +21,7 @@ RC IndexMeta::init(const char *name, IndexType index_type, const vector<FieldMet
   unique_           = unique;
 
   for (auto &field : fields) {
+    // (a,b) 与 (b,a) 是不同的字典序布局，B+Tree 比较器必须使用同样的字段顺序。
     fields_offset_.emplace_back(fields_total_len_);
     fields_total_len_ += field.len();
   }

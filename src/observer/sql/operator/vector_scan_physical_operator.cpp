@@ -26,10 +26,14 @@ VectorScanPhysicalOperator::VectorScanPhysicalOperator(Table *table, std::string
 
 RC VectorScanPhysicalOperator::open(Trx *trx)
 {
+  // 【赛题 18 vector-search】有 IVF 索引时，先由 ann_search 返回 top-k 候选 RID，
+  // 再回表、执行普通谓词并检查 MVCC；无索引路径则是全表计算距离后 ORDER BY/LIMIT。
   if (nullptr == table_ || nullptr == index_) {
     return RC::INTERNAL;
   }
 
+  // 这里索引只先取 limit 个候选。若之后有记录被 WHERE/MVCC 过滤，当前实现不会
+  // 继续向索引补取，因此可能少于 LIMIT，这是 ANN 与关系过滤组合的典型陷阱。
   rids_ = index_->ann_search(base_vector_, limit_);
 
   record_handler_ = table_->record_handler();
@@ -46,6 +50,7 @@ RC VectorScanPhysicalOperator::open(Trx *trx)
 
 RC VectorScanPhysicalOperator::next()
 {
+  // 索引只负责候选生成；RID 回表后的记录仍必须通过事务可见性检查。
   RC rc = RC::SUCCESS;
 
   if (cnt_ >= rids_.size()) {

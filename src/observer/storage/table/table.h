@@ -72,6 +72,8 @@ public:
   /**
    * @brief 在当前的表中插入一条记录
    * @details 在表文件和索引中插入关联数据。这里只管在表中插入数据，不关心事务相关操作。
+   * SQL/DML 正常路径应通过 Trx::insert_record 调用这里；Table 层只保证一张表内
+   * record 与各索引的物理一致性，不决定记录对哪个事务可见。
    * @param record[in/out] 传入的数据包含具体的数据，插入成功会通过此字段返回RID
    */
   RC insert_record(Record &record) override;
@@ -99,6 +101,8 @@ public:
   /**
    * @brief 可以在页面锁保护的情况下访问记录
    * @details 当前是在事务中访问记录，为了提供一个“原子性”的访问模式
+   * visitor 返回 false 表示无需继续修改该记录。MVCC 用它把可见性检查与
+   * begin/end xid 更新放在同一个页内临界区中。
    * @param rid
    * @param visitor
    * @return RC

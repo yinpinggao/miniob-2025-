@@ -28,6 +28,8 @@ RC SqlResult::open()
     return RC::INVALID_ARGUMENT;
   }
 
+  // SqlResult 是物理计划的驱动者。算子树的 open 会自顶向下初始化扫描器、
+  // 子算子和临时状态；事务也在第一次真正执行时按需启动。
   Trx *trx = session_->current_trx();
   trx->start_if_need();
   return operator_->open(trx);
@@ -43,8 +45,11 @@ RC SqlResult::close()
     LOG_WARN("failed to close operator. rc=%s", strrc(rc));
   }
 
+  // close 必须释放扫描器、临时文件和内存状态；随后销毁整棵物理算子树。
   operator_.reset();
 
+  // 非显式事务模式下，一条 SQL 就是一个事务边界：成功自动提交，失败回滚。
+  // BEGIN 后 session 进入 multi-operation mode，此处不会替用户提前提交。
   if (session_ && !session_->is_trx_multi_operation_mode()) {
     if (rc == RC::SUCCESS) {
       rc = session_->current_trx()->commit();
@@ -60,6 +65,8 @@ RC SqlResult::close()
 
 RC SqlResult::next_tuple(Tuple *&tuple)
 {
+  // Volcano 模型：父算子每调用一次 next，子树只生产下一条结果。
+  // RC::RECORD_EOF 表示数据结束，不是执行错误。
   RC rc = operator_->next();
   if (rc != RC::SUCCESS) {
     return rc;
@@ -71,6 +78,7 @@ RC SqlResult::next_tuple(Tuple *&tuple)
 
 RC SqlResult::next_chunk(Chunk &chunk)
 {
+  // Chunk 模式与 next_tuple 语义相同，但一次返回一批列式数据。
   RC rc = operator_->next(chunk);
   return rc;
 }
@@ -79,6 +87,6 @@ void SqlResult::set_operator(std::unique_ptr<PhysicalOperator> oper)
 {
   ASSERT(operator_ == nullptr, "current operator is not null. Result is not closed?");
   operator_ = std::move(oper);
-  // 这里调用了投影算子的方法，补充表头
+  // tuple_schema 从根算子向外暴露结果列名/类型，Communicator 据此打印表头。
   operator_->tuple_schema(tuple_schema_);
 }

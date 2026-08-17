@@ -36,6 +36,9 @@ RC BaseTable::set_value_to_record(char *record_data, const Value &value, const F
 
 RC BaseTable::make_record(int value_num, const Value *values, Record &record)
 {
+  // 【赛题 1 basic / 4 date / 13 null / 16 vector / 17 text】
+  // 这是 Value 进入固定长度 Record 的统一入口。新增数据类型时，除了 parser，
+  // 还必须保证 Value 转换、长度检查和最终字节布局在这里保持一致。
   RC rc = RC::SUCCESS;
   // 检查字段类型是否一致
   if (value_num + table_meta_.sys_field_num() != table_meta_.field_num()) {
@@ -43,6 +46,7 @@ RC BaseTable::make_record(int value_num, const Value *values, Record &record)
     return RC::SCHEMA_FIELD_MISSING;
   }
 
+  // MVCC 表可能在用户字段前增加隐藏系统字段；INSERT 的 values 只对应用户列。
   const int normal_field_start_index = table_meta_.sys_field_num();
   // 复制所有字段的值
   int   record_size = table_meta_.record_size();
@@ -54,6 +58,7 @@ RC BaseTable::make_record(int value_num, const Value *values, Record &record)
     const Value     &value = values[i];
     // 判断是否在 NOT NULL 字段设置 NULL 值
     if (value.is_null()) {
+      // nullable 字段的最后一个字节是 NULL 标志，数据区长度因此减 1。
       if (!field->nullable()) {
         return RC::NOT_NULLABLE_VALUE;
       }
@@ -89,6 +94,7 @@ RC BaseTable::make_record(int value_num, const Value *values, Record &record)
                   field->len());
         return RC::VALUE_TOO_LONG;
       }
+      // DATE 已在 Value 层转为 4 字节整数，VECTOR/TEXT 则按声明长度复制。
       rc = set_value_to_record(record_data, real_value, field);
     }
   }

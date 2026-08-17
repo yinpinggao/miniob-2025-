@@ -25,6 +25,8 @@ RC _typeof(const vector<Value> &args, Value &result)
 
 RC length(const vector<Value> &args, Value &result)
 {
+  // 【赛题 7 function】Binder 将函数名映射为 NormalFunctionType；这里负责
+  // 运行期参数类型检查和结果计算。
   if (args.size() != 1) {
     return RC::INVALID_ARGUMENT;
   }
@@ -38,6 +40,7 @@ RC length(const vector<Value> &args, Value &result)
 
 RC round(const vector<Value> &args, Value &result)
 {
+  // ROUND 支持 FLOAT 主参数和可选 INT 精度，其它类型按题面返回 FAILURE。
   if (args.size() != 1 && args.size() != 2) {
     return RC::INVALID_ARGUMENT;
   }
@@ -198,6 +201,8 @@ RC day(const vector<Value> &args, Value &result)
 
 RC date_format(const vector<Value> &args, Value &result)
 {
+  // DATE_FORMAT 扫描格式串并替换题面规定的日期格式符；非法格式符行为以题面
+  // 示例为准，不应想当然地等同于完整 MySQL。
   if (args.size() != 2) {
     return RC::INVALID_ARGUMENT;
   }

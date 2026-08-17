@@ -19,6 +19,8 @@ NestedLoopJoinPhysicalOperator::NestedLoopJoinPhysicalOperator() {}
 
 RC NestedLoopJoinPhysicalOperator::open(Trx *trx)
 {
+  // 【赛题 5 join-tables】基础连接算法是 Nested Loop Join：左侧每产生一行，
+  // 右侧重新 open 并扫描一遍，输出 JoinedTuple(left,right)。
   if (children_.size() != 2) {
     LOG_WARN("nlj operator should have 2 children");
     return RC::INTERNAL;
@@ -42,6 +44,8 @@ RC NestedLoopJoinPhysicalOperator::open(Trx *trx)
 
 RC NestedLoopJoinPhysicalOperator::next()
 {
+  // 状态机等价于双重循环：for each left，reopen(right)，for each right emit。
+  // 无索引时复杂度约 O(|L|×|R|)，多表查询通过左深 Join 树继续组合。
   bool left_need_step = (left_tuple_ == nullptr);
   RC   rc             = RC::SUCCESS;
   if (round_done_) {
@@ -153,6 +157,7 @@ RC NestedLoopJoinPhysicalOperator::right_next()
       }
     }
 
+    // 右孩子必须支持反复 close/open；阻塞算子 reopen 状态不完整会造成多轮 Join 丢行。
     rc = right_->open(trx_);
     if (rc != RC::SUCCESS) {
       return rc;

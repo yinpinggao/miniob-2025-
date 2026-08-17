@@ -26,6 +26,8 @@ ExternalSorter::~ExternalSorter() { close(); }
 
 RC ExternalSorter::sort(PhysicalOperator *input)
 {
+  // 【赛题 24 big-order-by】经典外部归并排序分两阶段：生成有序 runs，随后
+  // k 路归并。磁盘临时文件换取受控内存峰值，适合结果大于内存限制的场景。
   if (sorted_) {
     LOG_WARN("already sorted");
     return RC::INTERNAL;
@@ -54,6 +56,7 @@ RC ExternalSorter::sort(PhysicalOperator *input)
 
 RC ExternalSorter::generate_runs(PhysicalOperator *input)
 {
+  // 不断把 Tuple 扁平化后放入内存 buffer；达到字节/条数阈值便排序并刷成 run。
   LOG_INFO("generating runs with memory limit: %lu bytes", memory_limit_);
 
   while (true) {
@@ -112,6 +115,7 @@ RC ExternalSorter::generate_runs(PhysicalOperator *input)
 
 RC ExternalSorter::flush_buffer_to_run()
 {
+  // 每个 run 内部有序，后续归并只需在各 run 当前头元素间维护最小堆。
   if (buffer_.empty()) {
     return RC::SUCCESS;
   }

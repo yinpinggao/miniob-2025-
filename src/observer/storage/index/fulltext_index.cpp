@@ -18,6 +18,8 @@ FullTextIndex::FullTextIndex() : total_tokens_(0), average_idf_(0.0), average_id
 
 RC FullTextIndex::add_document(const RID &doc_rid, const std::string &text, const std::vector<std::string> *tokens)
 {
+  // 【赛题 23 full-text-index】文档经 jieba 分词后，构建 term -> (RID, tf) 的
+  // 倒排列表，并记录文档长度，用于后续 BM25 的 tf/df/长度归一化。
   std::vector<std::string> doc_tokens;
   
   if (tokens != nullptr) {
@@ -78,6 +80,8 @@ RC FullTextIndex::add_document(const RID &doc_rid, const std::string &text, cons
 
 RC FullTextIndex::remove_document(const RID &doc_rid)
 {
+  // 删除文档必须同步维护 posting list、文档数、总 token 数和 IDF 缓存；
+  // 任一统计未更新都会让剩余文档的 BM25 分数失真。
   auto doc_it = doc_stats_.find(doc_rid);
   if (doc_it == doc_stats_.end()) {
     return RC::SUCCESS;  // 文档不存在，不需要删除
@@ -169,6 +173,8 @@ RC FullTextIndex::search(const std::vector<std::string> &query_tokens, std::vect
 
 double FullTextIndex::calculate_bm25(const std::vector<std::string> &query_tokens, const RID &doc_rid) const
 {
+  // BM25 将词频、逆文档频率和文档长度归一化组合为相关性分数；赛题固定
+  // k1=1.5、b=0.75，并要求与指定 rank_bm25 行为对齐。
   auto doc_it = doc_stats_.find(doc_rid);
   if (doc_it == doc_stats_.end()) {
     return 0.0;  // 文档不存在
@@ -372,4 +378,3 @@ double FullTextIndex::calculate_average_idf() const
   
   return idf_sum / inverted_index_.size();
 }
-

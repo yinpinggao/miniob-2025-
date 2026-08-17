@@ -26,6 +26,8 @@ ScalarGroupByPhysicalOperator::ScalarGroupByPhysicalOperator(vector<Expression *
 
 RC ScalarGroupByPhysicalOperator::open(Trx *trx)
 {
+  // 没有 GROUP BY 字段时，所有输入属于一个隐式组；空输入仍应产生 COUNT=0，
+  // 而 SUM/AVG/MIN/MAX 通常为 NULL。
   ASSERT(children_.size() == 1, "group by operator only support one child, but got %d", children_.size());
 
   group_value_.reset();
@@ -49,7 +51,7 @@ RC ScalarGroupByPhysicalOperator::open(Trx *trx)
       return RC::INTERNAL;
     }
 
-    // 计算需要做聚合的值
+    // 每行只更新聚合中间状态，不必保存全部原始行。
     group_value_expression_tuple.set_tuple(child_tuple);
 
     // 计算聚合值
