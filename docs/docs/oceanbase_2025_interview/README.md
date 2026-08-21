@@ -35,6 +35,7 @@
 
 | 建议顺序 | 文档 | 内容 |
 |---|---|---|
+| 0 | [数据库内核知识教材（kernel/）](kernel/README.md) | 零基础教材：Buffer Pool、B+ 树、SQL 编译、火山模型、优化器、连接、排序聚合、MVCC、日志恢复、全文与向量检索，共 13 章 |
 | 1 | [项目架构与一条 SQL 的完整执行链](01_project_architecture.md) | Parser、Resolver、逻辑计划、物理计划、火山模型、存储与事务 |
 | 2 | [赛题 1—8：基础 SQL、类型、连接、表达式与复合索引](02_problems_01_08.md) | basic、update、drop-table、date、join、expression、function、multi-index |
 | 3 | [赛题 9—16：唯一性、聚合、子查询、NULL、集合、排序与向量](03_problems_09_16.md) | unique、group-by、sub-query、alias、null、union、order-by、vector-basic |
@@ -47,8 +48,9 @@
 如果你几乎没有数据库基础，建议按下面顺序学习：
 
 ```text
+第零遍：按 kernel/00 → kernel/12 顺序读数据库内核教材，建立通用原理
 第一遍：只读 01，先建立“一条 SQL 怎么跑”的整体地图
-第二遍：按 02 → 03 → 04 顺序理解 24 题
+第二遍：按 02 → 03 → 04 顺序理解 24 题，遇到不懂的原理回 kernel/ 对应章节
 第三遍：对照 06，从 SQL 一路追到存储层源码
 第四遍：使用 05 进行不看资料的口述和模拟追问
 ```
