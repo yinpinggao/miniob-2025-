@@ -119,6 +119,7 @@ public:
   {
     rid_       = other.rid_;
     base_rids_ = other.base_rids_;
+    field_mask_ = other.field_mask_;
     data_      = other.data_;
     len_       = other.len_;
     owner_     = other.owner_;
@@ -144,6 +145,7 @@ public:
     }
     this->rid_       = other.rid_;
     this->base_rids_ = other.base_rids_;
+    this->field_mask_ = other.field_mask_;
     memcpy(data_, other.data_, other.len_);
     return *this;
   }
@@ -153,6 +155,7 @@ public:
     Record new_record;
     new_record.rid_       = this->rid_;
     new_record.base_rids_ = this->base_rids_;
+    new_record.field_mask_ = this->field_mask_;
     new_record.len_       = this->len_;
     new_record.data_      = (char *)malloc(this->len_);
     memcpy(new_record.data_, this->data_, this->len_);
@@ -164,6 +167,7 @@ public:
   {
     rid_       = other.rid_;
     base_rids_ = std::move(other.base_rids_);
+    field_mask_ = std::move(other.field_mask_);
 
     if (!other.owner_) {
       data_        = other.data_;
@@ -315,6 +319,11 @@ public:
 
   void set_base_rids(std::vector<std::pair<BaseTable *, RID>> base_rids) { base_rids_ = std::move(base_rids); }
 
+  // For INSERT into a view, records need to retain which view columns were
+  // explicitly supplied. An empty mask means all columns are supplied.
+  void set_field_mask(std::vector<uint8_t> mask) { field_mask_ = std::move(mask); }
+  const std::vector<uint8_t> &field_mask() const { return field_mask_; }
+
   std::vector<std::pair<BaseTable *, RID>> &base_rids() { return base_rids_; }
 
   const std::vector<std::pair<BaseTable *, RID>> &base_rids() const { return base_rids_; }
@@ -322,6 +331,7 @@ public:
 private:
   RID rid_;                                             // 存储基表的记录位置
   std::vector<std::pair<BaseTable *, RID>> base_rids_;  // 用于视图存储当前记录由哪些基表的哪些记录组成
+  std::vector<uint8_t> field_mask_;                    // INSERT 显式指定的字段
 
   char *data_  = nullptr;
   int   len_   = 0;      /// 如果不是record自己来管理内存，这个字段可能是无效的

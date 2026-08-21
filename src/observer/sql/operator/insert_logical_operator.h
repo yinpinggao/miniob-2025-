@@ -26,15 +26,18 @@ See the Mulan PSL v2 for more details. */
 class InsertLogicalOperator : public LogicalOperator
 {
 public:
-  InsertLogicalOperator(BaseTable *table, const std::vector<std::vector<Value>> &);
+  InsertLogicalOperator(BaseTable *table, const std::vector<std::vector<Value>> &,
+      const std::vector<std::vector<uint8_t>> &column_masks);
   ~InsertLogicalOperator() override = default;
 
   LogicalOperatorType type() const override { return LogicalOperatorType::INSERT; }
 
   BaseTable                             *table() const { return table_; }
   const std::vector<std::vector<Value>> &values_list() const { return values_list_; };
+  const std::vector<std::vector<uint8_t>> &column_masks() const { return column_masks_; }
 
 private:
   BaseTable                             *table_ = nullptr;
   const std::vector<std::vector<Value>> &values_list_;
+  const std::vector<std::vector<uint8_t>> &column_masks_;
 };

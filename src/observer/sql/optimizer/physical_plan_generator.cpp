@@ -308,7 +308,8 @@ RC PhysicalPlanGenerator::create_plan(ProjectLogicalOperator &project_oper, uniq
 
 RC PhysicalPlanGenerator::create_plan(InsertLogicalOperator &insert_oper, unique_ptr<PhysicalOperator> &oper)
 {
-  auto insert_phy_oper = new InsertPhysicalOperator(insert_oper.table(), insert_oper.values_list());
+  auto insert_phy_oper =
+      new InsertPhysicalOperator(insert_oper.table(), insert_oper.values_list(), insert_oper.column_masks());
   oper.reset(insert_phy_oper);
   return RC::SUCCESS;
 }

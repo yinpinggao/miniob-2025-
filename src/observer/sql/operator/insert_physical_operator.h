@@ -27,7 +27,8 @@ class InsertStmt;
 class InsertPhysicalOperator : public PhysicalOperator
 {
 public:
-  InsertPhysicalOperator(BaseTable *table, const std::vector<std::vector<Value>> &values_list);
+  InsertPhysicalOperator(BaseTable *table, const std::vector<std::vector<Value>> &values_list,
+      const std::vector<std::vector<uint8_t>> &column_masks);
 
   ~InsertPhysicalOperator() override = default;
 
@@ -42,4 +43,5 @@ public:
 private:
   BaseTable                             *table_ = nullptr;
   const std::vector<std::vector<Value>> &values_list_;
+  const std::vector<std::vector<uint8_t>> &column_masks_;
 };

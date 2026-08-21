@@ -17,8 +17,9 @@ See the Mulan PSL v2 for more details. */
 #include "storage/table/table.h"
 #include "storage/trx/trx.h"
 
-InsertPhysicalOperator::InsertPhysicalOperator(BaseTable *table, const std::vector<std::vector<Value>> &values_list)
-    : table_(table), values_list_(values_list)
+InsertPhysicalOperator::InsertPhysicalOperator(BaseTable *table, const std::vector<std::vector<Value>> &values_list,
+    const std::vector<std::vector<uint8_t>> &column_masks)
+    : table_(table), values_list_(values_list), column_masks_(column_masks)
 {}
 
 RC InsertPhysicalOperator::open(Trx *trx)
@@ -30,6 +31,9 @@ RC InsertPhysicalOperator::open(Trx *trx)
     if (rc != RC::SUCCESS) {
       LOG_WARN("failed to make record. rc=%s", strrc(rc));
       return rc;
+    }
+    if (!column_masks_.empty()) {
+      records[i].set_field_mask(column_masks_[i]);
     }
   }
 

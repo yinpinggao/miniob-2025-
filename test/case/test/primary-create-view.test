@@ -9,3 +9,12 @@ CREATE TABLE view_not_null_base(id int not null);
 CREATE VIEW view_not_null AS SELECT id FROM view_not_null_base;
 INSERT INTO view_not_null(id) VALUES(NULL);
 SELECT COUNT(*) FROM view_not_null_base;
+
+-- echo 3. route a partial insert into only one base table of a join view
+CREATE TABLE create_view_t1(id int, age int, name char(10));
+CREATE TABLE create_view_t2(id int, age int, name char(10));
+CREATE VIEW create_view_v4 AS SELECT t1.id AS id, t1.age AS age, t2.name AS name FROM create_view_t1 t1, create_view_t2 t2 WHERE t1.id=t2.id;
+INSERT INTO create_view_v4 VALUES(8, 8, 'IPL2NX');
+INSERT INTO create_view_v4(id, age) VALUES(59, 59);
+SELECT COUNT(*) FROM create_view_t1;
+SELECT COUNT(*) FROM create_view_t2;

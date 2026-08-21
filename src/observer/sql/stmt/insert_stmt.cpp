@@ -131,6 +131,7 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
   }
 
   std::vector<std::vector<Value>> values_list = inserts.values_list;
+  std::vector<std::vector<uint8_t>> column_masks;
   const int                       field_num   = table_meta.field_num() - table_meta.sys_field_num();
 
   // check the fields number
@@ -170,19 +171,23 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
       }
     }
 
+    column_masks.reserve(values_list.size());
     for (auto &value_list : values_list) {
       std::vector<Value> values(field_num);
+      std::vector<uint8_t> mask(field_num, 0);
       for (auto &value : values) {
         value.set_null();
       }
       for (size_t k = 0; k < value_list.size(); ++k) {
         values[index[k]] = value_list[k];
+        mask[index[k]] = 1;
       }
       value_list = std::move(values);
+      column_masks.emplace_back(std::move(mask));
     }
   }
 
   // everything alright
-  stmt = new InsertStmt(table, std::move(values_list), {});
+  stmt = new InsertStmt(table, std::move(values_list), std::move(column_masks));
   return RC::SUCCESS;
 }

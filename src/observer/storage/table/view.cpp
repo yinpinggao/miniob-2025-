@@ -190,15 +190,21 @@
        value.set_null();
      }
  
-    // 记录视图中是否有字段映射到当前表。即使映射值全为 NULL，也应让
-    // 基表的 nullable/NOT NULL 约束决定插入是否成功，不能静默跳过。
+    // 只有用户显式指定了属于该基表的列，才向该基表路由一条 INSERT。
+    // 未指定的视图列会在 InsertStmt 中补 NULL，但不能据此误判为要
+    // 向其它基表插入；显式 NULL 则仍然需要传递给基表约束检查。
     bool has_mapped_field = false;
      
      for (int i = 0; i < logical_field_num; ++i) {
        auto &[base_table, field_id] = field_index_[i];
-       if (base_table == nullptr || base_table != table) {
-         continue;
-       }
+      if (base_table == nullptr || base_table != table) {
+        continue;
+      }
+
+      if (!record.field_mask().empty() &&
+          (i >= static_cast<int>(record.field_mask().size()) || record.field_mask()[i] == 0)) {
+        continue;
+      }
  
        Value value;
        rc = record.get_field(view_fields[i + view_sys_fields], value);

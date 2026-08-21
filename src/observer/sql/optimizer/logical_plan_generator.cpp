@@ -159,7 +159,8 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
 
 RC LogicalPlanGenerator::create_plan(InsertStmt *insert_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
-  auto insert_operator = new InsertLogicalOperator(insert_stmt->table(), insert_stmt->values_list());
+  auto insert_operator =
+      new InsertLogicalOperator(insert_stmt->table(), insert_stmt->values_list(), insert_stmt->column_masks());
   logical_operator.reset(insert_operator);
   return RC::SUCCESS;
 }
